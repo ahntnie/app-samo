@@ -1,0 +1,6 @@
+[  +36 ms] executing: sysctl hw.optional.arm64
+[   +9 ms] Exit code 0 from: sysctl hw.optional.arm64
+[        ] hw.optional.arm64: 1
+[        ] Running 1 shutdown hook
+[        ] Shutdown hooks complete
+[   +1 ms] exiting with code 64

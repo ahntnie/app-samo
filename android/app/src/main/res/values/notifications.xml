@@ -1,0 +1,4 @@
+<resources>
+    <string name="high_priority_channel_name">High Priority Notifications</string>
+    <string name="high_priority_channel_description">Notifications with high priority</string>
+</resources>
