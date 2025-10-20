@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "647126052008",
+    "project_id": "samo-a927b",
+    "storage_bucket": "samo-a927b.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:647126052008:android:449b874f27a0e21f4ae69d",
+        "android_client_info": {
+          "package_name": "com.nexta.etacherv4"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDUN3_iRgyH9XmElyLyoO_FrjuSzaP5i0Y"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
