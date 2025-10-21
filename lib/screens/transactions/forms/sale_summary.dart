@@ -839,6 +839,13 @@ class _SaleSummaryState extends State<SaleSummary> {
         'sale_created',
       );
 
+      // Gửi thông báo đến tất cả người dùng khác
+      await NotificationService.sendNotificationToAll(
+        "Phiếu Bán Hàng Mới",
+        "Có phiếu bán hàng mới: \"$firstProductName\" số lượng ${formatNumberLocal(totalImeiCount)} chiếc",
+        'sale_created',
+      );
+
       if (mounted) {
         setState(() {
           isProcessing = false;

@@ -1274,6 +1274,13 @@ class _ImportFormState extends State<ImportForm> {
                     'import_created',
                   );
 
+                  // Gửi thông báo đến tất cả người dùng khác
+                  await NotificationService.sendNotificationToAll(
+                    'Phiếu Nhập Hàng Mới',
+                    'Có phiếu nhập hàng mới: "${CacheUtil.getProductName(currentProductId)}" số lượng ${formatNumberLocal(currentImeiListLength)} chiếc',
+                    'import_created',
+                  );
+
                   if (mounted) {
                     setState(() {
                       categoryId = null;

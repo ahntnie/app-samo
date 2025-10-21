@@ -207,6 +207,13 @@ class _CostFormState extends State<CostForm> {
                       'cost_created',
                     );
 
+                    // Gửi thông báo đến tất cả người dùng khác
+                    await NotificationService.sendNotificationToAll(
+                      "Phiếu Chi Phí Mới",
+                      "Có phiếu chi phí mới được tạo cho $account với số tiền ${formatNumberLocal(amount!)} $currency",
+                      'cost_created',
+                    );
+
                     final newBalance = balance - amount!;
                     await widget.tenantClient
                         .from('financial_accounts')

@@ -416,4 +416,65 @@ class NotificationService {
       );
     }
   }
+
+  // Gửi thông báo đến tất cả thiết bị trong hệ thống
+  static Future<void> sendNotificationToAll(
+    String title,
+    String body,
+    String payload,
+  ) async {
+    try {
+      // Lấy tất cả FCM tokens từ database
+      final tokensResponse = await _tenantClient
+          .from('device_tokens')
+          .select('fcm_token');
+
+      if (tokensResponse.isEmpty) {
+        print('Không có device token nào để gửi thông báo');
+        return;
+      }
+
+      final tokens = tokensResponse
+          .map((token) => token['fcm_token'] as String)
+          .toList();
+
+      print('Gửi thông báo đến ${tokens.length} thiết bị');
+
+      // Gửi thông báo đến từng token
+      for (final token in tokens) {
+        try {
+          await _sendFCMNotification(token, title, body, payload);
+        } catch (e) {
+          print('Lỗi khi gửi thông báo đến token $token: $e');
+        }
+      }
+    } catch (e) {
+      print('Lỗi khi lấy danh sách device tokens: $e');
+    }
+  }
+
+  // Gửi FCM notification qua Supabase function
+  static Future<void> _sendFCMNotification(
+    String token,
+    String title,
+    String body,
+    String payload,
+  ) async {
+    try {
+      await _tenantClient.functions.invoke(
+        'send-fcm-notification',
+        body: {
+          'token': token,
+          'title': title,
+          'body': body,
+          'data': {
+            'payload': payload,
+            'timestamp': DateTime.now().toIso8601String(),
+          },
+        },
+      );
+    } catch (e) {
+      print('Lỗi khi gọi Supabase function send-fcm-notification: $e');
+    }
+  }
 }

@@ -639,6 +639,13 @@ class _FixReceiveSummaryState extends State<FixReceiveSummary> {
         'fix_receive_created',
       );
 
+      // Gửi thông báo đến tất cả người dùng khác
+      await NotificationService.sendNotificationToAll(
+        'Phiếu Nhận Hàng Sửa Mới',
+        'Có phiếu nhận hàng sửa về kho mới',
+        'fix_receive_created',
+      );
+
       if (mounted) {
         setState(() {
           isProcessing = false;

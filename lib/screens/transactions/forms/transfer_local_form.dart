@@ -496,6 +496,13 @@ class _TransferLocalFormState extends State<TransferLocalForm> {
         'transfer_local_created',
       );
 
+      // Gửi thông báo đến tất cả người dùng khác
+      await NotificationService.sendNotificationToAll(
+        "Phiếu Vận Chuyển Nội Địa Mới",
+        "Có phiếu vận chuyển nội địa mới: ${CacheUtil.getProductName(productId)} số lượng ${formatNumberLocal(imeiList.length)}",
+        'transfer_local_created',
+      );
+
       if (mounted) {
         await showDialog(
           context: context,

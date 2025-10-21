@@ -262,6 +262,13 @@ class _ExchangeFormState extends State<ExchangeForm> {
         'exchange_created',
       );
 
+      // Gửi thông báo đến tất cả người dùng khác
+      await NotificationService.sendNotificationToAll(
+        "Phiếu Đổi Tiền Mới",
+        "Có phiếu đổi tiền mới được tạo với số tiền ${formatNumberLocal(amount)} ${fromAcc['currency']}",
+        'exchange_created',
+      );
+
       await widget.tenantClient
           .from('financial_accounts')
           .update({'balance': fromBalance - amount})

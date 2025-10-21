@@ -585,6 +585,13 @@ class _ReturnSummaryState extends State<ReturnSummary> {
         'return_created',
       );
 
+      // Gửi thông báo đến tất cả người dùng khác
+      await NotificationService.sendNotificationToAll(
+        'Phiếu Trả Hàng Mới',
+        'Có phiếu trả hàng mới: $firstProductName số lượng $totalQuantity',
+        'return_created',
+      );
+
       if (account == 'Công nợ') {
         debugPrint('Updating supplier debt');
         final currentSupplier = await supabase

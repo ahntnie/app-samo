@@ -412,6 +412,13 @@ class _ReceiveFormState extends State<ReceiveForm> {
                       'receive_created',
                     );
 
+                    // Gửi thông báo đến tất cả người dùng khác
+                    await NotificationService.sendNotificationToAll(
+                      "Phiếu Thu Tiền Mới",
+                      "Có phiếu thu tiền mới được tạo cho $partnerName với số tiền ${formatNumberLocal(amount!)} $currency",
+                      'receive_created',
+                    );
+
                     await widget.tenantClient
                         .from(table)
                         .update({debtColumn: newDebt})

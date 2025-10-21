@@ -258,6 +258,13 @@ class _FixSendSummaryState extends State<FixSendSummary> {
         'fix_send_created',
       );
 
+      // Gửi thông báo đến tất cả người dùng khác
+      await NotificationService.sendNotificationToAll(
+        "Phiếu Gửi Sửa Mới",
+        "Có phiếu gửi sửa mới với ${formatNumberLocal(widget.ticketItems.length)} mục",
+        'fix_send_created',
+      );
+
       if (mounted) {
         setState(() {
           isProcessing = false;

@@ -496,6 +496,13 @@ class _TransferGlobalFormState extends State<TransferGlobalForm> {
         'transfer_global_created',
       );
 
+      // Gửi thông báo đến tất cả người dùng khác
+      await NotificationService.sendNotificationToAll(
+        "Phiếu Vận Chuyển Quốc Tế Mới",
+        "Có phiếu vận chuyển quốc tế mới: ${CacheUtil.getProductName(productId)} số lượng ${formatNumberLocal(imeiList.length)}",
+        'transfer_global_created',
+      );
+
       if (mounted) {
         await showDialog(
           context: context,
@@ -1121,6 +1128,13 @@ class _TransferGlobalFormState extends State<TransferGlobalForm> {
           137,
           'Phiếu Chuyển Kho Quốc Tế Đã Tạo',
           'Đã chuyển ${imeiList.length} sản phẩm ${CacheUtil.getProductName(productId)} cho ${transporter}',
+          'transfer_global_created',
+        );
+
+        // Gửi thông báo đến tất cả người dùng khác
+        await NotificationService.sendNotificationToAll(
+          'Phiếu Chuyển Kho Quốc Tế Mới',
+          'Có phiếu chuyển kho quốc tế mới: ${imeiList.length} sản phẩm ${CacheUtil.getProductName(productId)} cho ${transporter}',
           'transfer_global_created',
         );
 

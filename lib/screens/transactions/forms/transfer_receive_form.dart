@@ -926,6 +926,13 @@ class _TransferReceiveFormState extends State<TransferReceiveForm> {
           'transfer_receive_created',
         );
 
+        // Gửi thông báo đến tất cả người dùng khác
+        await NotificationService.sendNotificationToAll(
+          'Phiếu Nhập Kho Vận Chuyển Mới',
+          'Có phiếu nhập kho vận chuyển mới: $productName imei ${imeis.join(', ')}',
+          'transfer_receive_created',
+        );
+
         if (mounted) {
           Navigator.pop(context);
           ScaffoldMessenger.of(context).showSnackBar(

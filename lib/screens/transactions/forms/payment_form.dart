@@ -435,6 +435,13 @@ class _PaymentFormState extends State<PaymentForm> {
                         "Đã tạo phiếu chi với số tiền ${formatNumberLocal(amount)} $currency",
                         'payment_created',
                       );
+
+                      // Gửi thông báo đến tất cả người dùng khác
+                      await NotificationService.sendNotificationToAll(
+                        "Phiếu Chi Mới",
+                        "Có phiếu chi mới được tạo với số tiền ${formatNumberLocal(amount)} $currency",
+                        'payment_created',
+                      );
         
                     } catch (e) {
                       print('Error showing payment notification: $e');

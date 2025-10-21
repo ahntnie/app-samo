@@ -1106,6 +1106,13 @@ class _ReimportFormState extends State<ReimportForm> {
           'reimport_created',
         );
 
+        // Gửi thông báo đến tất cả người dùng khác
+        await NotificationService.sendNotificationToAll(
+          'Phiếu Nhập Lại Hàng Mới',
+          'Có phiếu nhập lại hàng mới cho ${customerGroups.keys.join(', ')}',
+          'reimport_created',
+        );
+
         if (mounted) {
           Navigator.pop(context);
           await showDialog(
