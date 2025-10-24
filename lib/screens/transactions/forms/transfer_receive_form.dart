@@ -724,7 +724,6 @@ class _TransferReceiveFormState extends State<TransferReceiveForm> {
     try {
       final totalStopwatch = Stopwatch()..start();
       final now = DateTime.now();
-      final isManualImei = imeiList.isNotEmpty;
 
       if (imeis.isEmpty) {
         throw Exception('Vui lòng nhập ít nhất 1 IMEI để tạo phiếu nhập kho');
@@ -926,37 +925,9 @@ class _TransferReceiveFormState extends State<TransferReceiveForm> {
           'transfer_receive_created',
         );
 
-        // Gửi thông báo đến tất cả người dùng khác
-        await NotificationService.sendNotificationToAll(
-          'Phiếu Nhập Kho Vận Chuyển Mới',
-          'Có phiếu nhập kho vận chuyển mới: $productName imei ${imeis.join(', ')}',
-          'transfer_receive_created',
-        );
-
         if (mounted) {
           Navigator.pop(context);
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Tạo phiếu thành công'),
-              duration: Duration(seconds: 2),
-            ),
-          );
-
-          setState(() {
-            warehouseId = null;
-            productId = null;
-            imei = '';
-            imeiController.text = '';
-            productController.text = '';
-            warehouseController.text = '';
-            note = null;
-            transportFee = null;
-            feeController.text = '';
-            quantity = 0;
-            quantityController.text = '';
-            imeiError = null;
-            imeiList = [];
-          });
+          Navigator.pop(context);
         }
 
       } catch (e) {
@@ -1125,21 +1096,6 @@ class _TransferReceiveFormState extends State<TransferReceiveForm> {
                       imeiList = [];
                     });
                     _fetchImeiSuggestions('');
-                    
-                    // Tự động lấy IMEI nếu đã có số lượng
-                    if (quantity > 0) {
-                      try {
-                        final autoImeis = await _generateRandomImeis(quantity, selectedId);
-                        setState(() {
-                          imeiList = autoImeis;
-                        });
-                      } catch (e) {
-                        setState(() {
-                          imeiList = [];
-                        });
-                        _showErrorSnackBar('$e');
-                      }
-                    }
                   }
                 },
                 fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
@@ -1169,40 +1125,75 @@ class _TransferReceiveFormState extends State<TransferReceiveForm> {
               ),
             ),
             wrapField(
-              TextFormField(
-                controller: quantityController,
-                keyboardType: TextInputType.number,
-                enabled: !isImeiManual,
-                onChanged: (val) async {
-                  final newQuantity = int.tryParse(val) ?? 0;
-                  setState(() {
-                    quantity = newQuantity;
-                  });
-                  
-                  // Tự động lấy IMEI khi có sản phẩm và số lượng
-                  if (productId != null && newQuantity > 0) {
-                    try {
-                      final autoImeis = await _generateRandomImeis(newQuantity, productId!);
-                      setState(() {
-                        imeiList = autoImeis;
-                      });
-                    } catch (e) {
-                      setState(() {
-                        imeiList = [];
-                      });
-                      _showErrorSnackBar('$e');
-                    }
-                  } else {
-                    setState(() {
-                      imeiList = [];
-                    });
-                  }
-                },
-                decoration: const InputDecoration(
-                  labelText: 'Số lượng (tự động lấy IMEI nếu có)',
-                  border: InputBorder.none,
-                  isDense: true,
-                ),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextFormField(
+                      controller: quantityController,
+                      keyboardType: TextInputType.number,
+                      enabled: !isImeiManual,
+                      onChanged: (val) {
+                        setState(() {
+                          quantity = int.tryParse(val) ?? 0;
+                        });
+                      },
+                      decoration: const InputDecoration(
+                        labelText: 'Số lượng',
+                        border: InputBorder.none,
+                        isDense: true,
+                      ),
+                    ),
+                  ),
+                  if (!isImeiManual)
+                    IconButton(
+                      icon: const Icon(Icons.search, color: Colors.blue),
+                      onPressed: () async {
+                        if (productId == null) {
+                          _showErrorSnackBar('Vui lòng chọn sản phẩm trước!');
+                          return;
+                        }
+                        
+                        if (quantity <= 0) {
+                          _showErrorSnackBar('Vui lòng nhập số lượng hợp lệ!');
+                          return;
+                        }
+                        
+                        final confirmed = await showDialog<bool>(
+                          context: context,
+                          builder: (context) => AlertDialog(
+                            title: const Text('Xác nhận'),
+                            content: Text('Tự động lấy $quantity IMEI từ kho?'),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(context, false),
+                                child: const Text('Hủy'),
+                              ),
+                              ElevatedButton(
+                                onPressed: () => Navigator.pop(context, true),
+                                child: const Text('Xác nhận'),
+                              ),
+                            ],
+                          ),
+                        );
+                        
+                        if (confirmed == true) {
+                          try {
+                            final autoImeis = await _generateRandomImeis(quantity, productId!);
+                            setState(() {
+                              imeiList = autoImeis;
+                            });
+                          } catch (e) {
+                            setState(() {
+                              imeiList = [];
+                            });
+                            _showErrorSnackBar('$e');
+                          }
+                        }
+                      },
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                    ),
+                ],
               ),
             ),
             wrapField(

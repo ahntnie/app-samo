@@ -41,6 +41,7 @@ class ReceiveForm extends StatefulWidget {
 class _ReceiveFormState extends State<ReceiveForm> {
   String? partnerType;
   String? partnerName;
+  String? partnerId;
   double? amount;
   String? currency;
   String? account;
@@ -55,6 +56,7 @@ class _ReceiveFormState extends State<ReceiveForm> {
     'Đơn vị vận chuyển',
   ];
   List<String> partnerNames = [];
+  Map<String, String> partnerIdMap = {}; // Map name to id for customers
   List<String> currencies = [];
   List<String> accounts = [];
 
@@ -144,7 +146,8 @@ class _ReceiveFormState extends State<ReceiveForm> {
             ? 'fix_units'
             : 'transporters';
     try {
-      final res = await widget.tenantClient.from(table).select('name');
+      final selectColumns = (type == 'Khách hàng' || type == 'Nhà cung cấp' || type == 'Đơn vị fix lỗi') ? 'id, name' : 'name';
+      final res = await widget.tenantClient.from(table).select(selectColumns);
       if (mounted) {
         setState(() {
           partnerNames =
@@ -153,7 +156,21 @@ class _ReceiveFormState extends State<ReceiveForm> {
                   .where((e) => e != null)
                   .cast<String>()
                   .toList();
+          // Build id map for customers, suppliers, and fix units
+          if (type == 'Khách hàng' || type == 'Nhà cung cấp' || type == 'Đơn vị fix lỗi') {
+            partnerIdMap = {};
+            for (var e in res) {
+              final name = e['name'] as String?;
+              final id = e['id']?.toString();
+              if (name != null && id != null) {
+                partnerIdMap[name] = id;
+              }
+            }
+          } else {
+            partnerIdMap = {};
+          }
           partnerName = null;
+          partnerId = null;
         });
       }
     } catch (e) {
@@ -286,13 +303,23 @@ class _ReceiveFormState extends State<ReceiveForm> {
 
       if (partnerType != null && partnerName != null) {
         final table = getTable(partnerType!);
-        final partnerData =
-            await widget.tenantClient
-                .from(table)
-                .select()
-                .eq('name', partnerName!)
-                .single();
-        snapshotData[table] = partnerData;
+        if ((partnerType == 'Khách hàng' || partnerType == 'Nhà cung cấp' || partnerType == 'Đơn vị fix lỗi') && partnerId != null) {
+          final partnerData =
+              await widget.tenantClient
+                  .from(table)
+                  .select()
+                  .eq('id', partnerId!)
+                  .single();
+          snapshotData[table] = partnerData;
+        } else {
+          final partnerData =
+              await widget.tenantClient
+                  .from(table)
+                  .select()
+                  .eq('name', partnerName!)
+                  .single();
+          snapshotData[table] = partnerData;
+        }
       }
     } catch (e) {
       print('Error creating snapshot: $e');
@@ -326,8 +353,13 @@ class _ReceiveFormState extends State<ReceiveForm> {
     final balance = accData?['balance'] as num? ?? 0;
 
     final table = getTable(partnerType!);
-    final partnerData =
-        await widget.tenantClient
+    final partnerData = (partnerType == 'Khách hàng' || partnerType == 'Nhà cung cấp' || partnerType == 'Đơn vị fix lỗi') && partnerId != null
+        ? await widget.tenantClient
+            .from(table)
+            .select('debt_vnd, debt_cny, debt_usd')
+            .eq('id', partnerId!)
+            .single()
+        : await widget.tenantClient
             .from(table)
             .select('debt_vnd, debt_cny, debt_usd')
             .eq('name', partnerName!)
@@ -384,8 +416,9 @@ class _ReceiveFormState extends State<ReceiveForm> {
                             .from('financial_orders')
                             .insert({
                               'type': 'receive',
-                              'partner_type': partnerType,
+                              'partner_type': getPartnerTypeForDB(partnerType!),
                               'partner_name': partnerName!,
+                              'partner_id': partnerId,
                               'amount': amount,
                               'currency': currency!,
                               'account': account!,
@@ -412,17 +445,17 @@ class _ReceiveFormState extends State<ReceiveForm> {
                       'receive_created',
                     );
 
-                    // Gửi thông báo đến tất cả người dùng khác
-                    await NotificationService.sendNotificationToAll(
-                      "Phiếu Thu Tiền Mới",
-                      "Có phiếu thu tiền mới được tạo cho $partnerName với số tiền ${formatNumberLocal(amount!)} $currency",
-                      'receive_created',
-                    );
-
-                    await widget.tenantClient
-                        .from(table)
-                        .update({debtColumn: newDebt})
-                        .eq('name', partnerName!);
+                    if ((partnerType == 'Khách hàng' || partnerType == 'Nhà cung cấp' || partnerType == 'Đơn vị fix lỗi') && partnerId != null) {
+                      await widget.tenantClient
+                          .from(table)
+                          .update({debtColumn: newDebt})
+                          .eq('id', partnerId!);
+                    } else {
+                      await widget.tenantClient
+                          .from(table)
+                          .update({debtColumn: newDebt})
+                          .eq('name', partnerName!);
+                    }
 
                     await widget.tenantClient
                         .from('financial_accounts')
@@ -464,6 +497,13 @@ class _ReceiveFormState extends State<ReceiveForm> {
   }
 
   String getTable(String type) {
+    if (type == 'Khách hàng') return 'customers';
+    if (type == 'Nhà cung cấp') return 'suppliers';
+    if (type == 'Đơn vị fix lỗi') return 'fix_units';
+    return 'transporters';
+  }
+
+  String getPartnerTypeForDB(String type) {
     if (type == 'Khách hàng') return 'customers';
     if (type == 'Nhà cung cấp') return 'suppliers';
     if (type == 'Đơn vị fix lỗi') return 'fix_units';
@@ -551,7 +591,14 @@ class _ReceiveFormState extends State<ReceiveForm> {
                           },
                           onSelected: (val) {
                             if (mounted) {
-                              setState(() => partnerName = val);
+                              setState(() {
+                                partnerName = val;
+                                if (partnerType == 'Khách hàng' || partnerType == 'Nhà cung cấp' || partnerType == 'Đơn vị fix lỗi') {
+                                  partnerId = partnerIdMap[val];
+                                } else {
+                                  partnerId = null;
+                                }
+                              });
                             }
                           },
                           fieldViewBuilder: (

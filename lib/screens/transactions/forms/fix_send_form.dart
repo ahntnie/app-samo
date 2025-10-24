@@ -10,6 +10,7 @@ import '../../text_scanner_screen.dart';
 // Cache utility class
 class CacheUtil {
   static final Map<String, String> productNameCache = {};
+  static final Map<String, String> warehouseNameCache = {};
 
   static void cacheProductName(dynamic id, dynamic products) {
     if (id != null && products != null) {
@@ -22,6 +23,9 @@ class CacheUtil {
   static String getProductName(String? id) {
     return id != null ? productNameCache[id] ?? 'Không xác định' : 'Không xác định';
   }
+
+  static void cacheWarehouseName(String id, String name) => warehouseNameCache[id] = name;
+  static String getWarehouseName(String? id) => id != null ? warehouseNameCache[id] ?? 'Không xác định' : 'Không xác định';
 }
 
 // Constants for IMEI handling
@@ -73,6 +77,7 @@ class FixSendForm extends StatefulWidget {
 
 class _FixSendFormState extends State<FixSendForm> {
   String? fixer;
+  String? fixerId;
   String? productId;
   String? imei = '';
   List<String> imeiList = [];
@@ -80,8 +85,10 @@ class _FixSendFormState extends State<FixSendForm> {
   List<Map<String, dynamic>> ticketItems = [];
 
   List<String> fixers = [];
+  Map<String, String> fixerIdMap = {}; // Map name to id for fixers
   List<String> imeiSuggestions = [];
   Map<String, String> productMap = {};
+  List<Map<String, dynamic>> warehouses = [];
   bool isLoading = true;
   String? errorMessage;
   String? imeiError;
@@ -124,7 +131,7 @@ class _FixSendFormState extends State<FixSendForm> {
       final supabase = widget.tenantClient;
 
       final fixerResponse = await retry(
-        () => supabase.from('fix_units').select('name'),
+        () => supabase.from('fix_units').select('id, name'),
         operation: 'Fetch fixers',
       );
       final fixerList = fixerResponse
@@ -132,6 +139,15 @@ class _FixSendFormState extends State<FixSendForm> {
           .whereType<String>()
           .toList()
         ..sort();
+      
+      // Build id map for fixers
+      for (var e in fixerResponse) {
+        final name = e['name'] as String?;
+        final id = e['id']?.toString();
+        if (name != null && id != null) {
+          fixerIdMap[name] = id;
+        }
+      }
 
       final productResponse = await retry(
         () => supabase.from('products_name').select('id, products'),
@@ -142,9 +158,28 @@ class _FixSendFormState extends State<FixSendForm> {
           .toList()
         ..sort((a, b) => (a['name'] as String).toLowerCase().compareTo((b['name'] as String).toLowerCase()));
 
+      final warehouseResponse = await retry(
+        () => supabase.from('warehouses').select('id, name'),
+        operation: 'Fetch warehouses',
+      );
+      final warehouseList = warehouseResponse
+          .map((e) {
+            final id = e['id']?.toString();
+            final name = e['name'] as String?;
+            if (id != null && name != null) {
+              CacheUtil.cacheWarehouseName(id, name);
+              return {'id': id, 'name': name};
+            }
+            return null;
+          })
+          .whereType<Map<String, dynamic>>()
+          .toList()
+        ..sort((a, b) => (a['name'] as String).toLowerCase().compareTo((b['name'] as String).toLowerCase()));
+
       if (mounted) {
         setState(() {
           fixers = fixerList;
+          warehouses = warehouseList;
           isLoading = false;
 
           productMap = {
@@ -154,6 +189,11 @@ class _FixSendFormState extends State<FixSendForm> {
 
           for (var product in productList) {
             CacheUtil.cacheProductName(product['id'], product['name']);
+          }
+          
+          // Set fixerId if initialFixer is provided
+          if (widget.initialFixer != null) {
+            fixerId = fixerIdMap[widget.initialFixer];
           }
         });
       }
@@ -458,6 +498,126 @@ class _FixSendFormState extends State<FixSendForm> {
     }
   }
 
+  Future<void> _showAutoImeiDialog() async {
+    if (productId == null) {
+      await showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Thông báo'),
+          content: const Text('Vui lòng chọn sản phẩm trước!'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Đóng'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    int quantity = 0;
+    String? selectedWarehouseId;
+
+    await showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Tự động lấy IMEI'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'Số lượng máy gửi sửa'),
+                onChanged: (val) => quantity = int.tryParse(val) ?? 0,
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                value: selectedWarehouseId,
+                items: warehouses.map((w) => DropdownMenuItem(
+                  value: w['id'] as String,
+                  child: Text(w['name'] as String),
+                )).toList(),
+                decoration: const InputDecoration(
+                  labelText: 'Kho gửi đi sửa',
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (val) => setDialogState(() => selectedWarehouseId = val),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Hủy'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                Navigator.pop(context);
+                if (quantity > 0 && selectedWarehouseId != null) {
+                  await _fetchImeisForQuantity(quantity, selectedWarehouseId!);
+                }
+              },
+              child: const Text('Xác nhận'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _fetchImeisForQuantity(int quantity, String warehouseId) async {
+    if (productId == null || quantity <= 0) return;
+
+    try {
+      final supabase = widget.tenantClient;
+      final response = await retry(
+        () => supabase
+            .from('products')
+            .select('imei')
+            .eq('product_id', productId!)
+            .eq('status', 'Tồn kho')
+            .eq('warehouse_id', warehouseId)
+            .limit(quantity),
+        operation: 'Fetch IMEIs for auto',
+      );
+
+      final imeiListFromDb = response
+          .map((e) => e['imei'] as String?)
+          .whereType<String>()
+          .where((imei) => !imeiList.contains(imei))
+          .toList()
+        ..sort();
+
+      if (imeiListFromDb.length < quantity) {
+        if (mounted) {
+          await showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Thông báo'),
+              content: Text('Số lượng sản phẩm không đủ! Chỉ có ${imeiListFromDb.length} sản phẩm trong kho "${CacheUtil.getWarehouseName(warehouseId)}".'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Đóng'),
+                ),
+              ],
+            ),
+          );
+        }
+      }
+
+      if (mounted && imeiListFromDb.isNotEmpty) {
+        setState(() {
+          imeiList.addAll(imeiListFromDb);
+        });
+      }
+    } catch (e) {
+      debugPrint('Error fetching IMEIs: $e');
+    }
+  }
+
   void addToTicket(BuildContext scaffoldContext) async {
     if (fixer == null || productId == null || imeiList.isEmpty) {
       if (mounted) {
@@ -528,6 +688,7 @@ class _FixSendFormState extends State<FixSendForm> {
 
     final item = {
       'fixer': fixer!,
+      'fixer_id': fixerId,
       'product_id': productId!,
       'product_name': CacheUtil.getProductName(productId),
       'imei': imeiList.join(','),
@@ -766,14 +927,14 @@ class _FixSendFormState extends State<FixSendForm> {
             },
           ),
         ),
-        // 2 nút quét
+        // 3 nút quét
         Row(
           children: [
             // Nút quét QR (màu vàng)
             Expanded(
               child: Container(
-                height: 24, // Chiều cao bằng 1/2 của phần còn lại
-                margin: const EdgeInsets.only(right: 4),
+                height: 24,
+                margin: const EdgeInsets.only(right: 2),
                 child: ElevatedButton.icon(
                   onPressed: _scanQRCode,
                   icon: const Icon(Icons.qr_code_scanner, size: 16),
@@ -792,14 +953,34 @@ class _FixSendFormState extends State<FixSendForm> {
             // Nút quét Text (màu xanh lá cây)
             Expanded(
               child: Container(
-                height: 24, // Chiều cao bằng 1/2 của phần còn lại
-                margin: const EdgeInsets.only(left: 4),
+                height: 24,
+                margin: const EdgeInsets.symmetric(horizontal: 2),
                 child: ElevatedButton.icon(
                   onPressed: _scanText,
                   icon: const Icon(Icons.text_fields, size: 16),
                   label: const Text('IMEI', style: TextStyle(fontSize: 12)),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.green,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            // Nút Auto IMEI (màu xanh dương)
+            Expanded(
+              child: Container(
+                height: 24,
+                margin: const EdgeInsets.only(left: 2),
+                child: ElevatedButton.icon(
+                  onPressed: _showAutoImeiDialog,
+                  icon: const Icon(Icons.auto_awesome, size: 16),
+                  label: const Text('Auto', style: TextStyle(fontSize: 12)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.blue,
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                     shape: RoundedRectangleBorder(
@@ -901,6 +1082,7 @@ class _FixSendFormState extends State<FixSendForm> {
                         if (selection == 'Không tìm thấy đơn vị sửa') return;
                         setState(() {
                           fixer = selection;
+                          fixerId = fixerIdMap[selection];
                         });
                       },
                       fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {

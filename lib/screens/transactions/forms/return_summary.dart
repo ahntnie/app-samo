@@ -113,12 +113,25 @@ class _ReturnSummaryState extends State<ReturnSummary> {
       final snapshotData = <String, dynamic>{};
 
       debugPrint('Creating snapshot for ticket $ticketId');
-      final supplierData = await supabase
-          .from('suppliers')
-          .select()
-          .eq('name', widget.supplier)
-          .single();
-      snapshotData['suppliers'] = supplierData;
+      // Lấy tất cả supplier IDs từ ticketItems
+      final supplierIds = widget.ticketItems
+          .map((item) => item['supplier_id']?.toString())
+          .whereType<String>()
+          .toSet()
+          .toList();
+      
+      final suppliersDataList = <Map<String, dynamic>>[];
+      for (var supplierId in supplierIds) {
+        final supplierData = await supabase
+            .from('suppliers')
+            .select()
+            .eq('id', supplierId)
+            .maybeSingle();
+        if (supplierData != null) {
+          suppliersDataList.add(supplierData);
+        }
+      }
+      snapshotData['suppliers'] = suppliersDataList;
 
       if (account != null && account != 'Công nợ') {
         final accountData = await supabase
@@ -150,7 +163,7 @@ class _ReturnSummaryState extends State<ReturnSummary> {
         final imeiList = (item['imei'] as String).split(',').where((e) => e.trim().isNotEmpty).toList();
         return {
           'ticket_id': ticketId,
-          'supplier': widget.supplier,
+          'supplier_id': item['supplier_id'],
           'product_id': item['product_id'],
           'product_name': item['product_name'],
           'imei': item['imei'],
@@ -180,15 +193,23 @@ class _ReturnSummaryState extends State<ReturnSummary> {
   Future<bool> _validateForeignKeys() async {
     final supabase = widget.tenantClient;
 
-    debugPrint('Validating supplier: ${widget.supplier}');
-    final supplierResponse = await supabase
-        .from('suppliers')
-        .select('name')
-        .eq('name', widget.supplier)
-        .maybeSingle();
-    if (supplierResponse == null) {
-      debugPrint('Invalid supplier: ${widget.supplier}');
-      return false;
+    // Validate tất cả supplier IDs từ ticketItems
+    final supplierIds = widget.ticketItems
+        .map((item) => item['supplier_id']?.toString())
+        .whereType<String>()
+        .toSet();
+    
+    for (var supplierId in supplierIds) {
+      debugPrint('Validating supplier_id: $supplierId');
+      final supplierResponse = await supabase
+          .from('suppliers')
+          .select('id')
+          .eq('id', supplierId)
+          .maybeSingle();
+      if (supplierResponse == null) {
+        debugPrint('Invalid supplier_id: $supplierId');
+        return false;
+      }
     }
 
     for (final item in widget.ticketItems) {
@@ -231,10 +252,21 @@ class _ReturnSummaryState extends State<ReturnSummary> {
     try {
       // Rollback suppliers
       if (snapshot['suppliers'] != null) {
-        await supabase
-          .from('suppliers')
-          .update(snapshot['suppliers'])
-          .eq('name', widget.supplier);
+        final suppliersData = snapshot['suppliers'];
+        if (suppliersData is List) {
+          for (var supplierData in suppliersData) {
+            await supabase
+              .from('suppliers')
+              .update(supplierData)
+              .eq('name', supplierData['name']);
+          }
+        } else {
+          // Backward compatibility for old snapshots
+          await supabase
+            .from('suppliers')
+            .update(suppliersData)
+            .eq('name', widget.supplier);
+        }
       }
 
       // Rollback financial accounts
@@ -539,7 +571,7 @@ class _ReturnSummaryState extends State<ReturnSummary> {
         final imeiList = (item['imei'] as String).split(',').where((e) => e.trim().isNotEmpty).toList();
         return {
           'ticket_id': ticketId,
-          'supplier': widget.supplier,
+          'supplier_id': item['supplier_id'],
           'product_id': item['product_id'],
           'product_name': item['product_name'],
           'imei': item['imei'],
@@ -585,47 +617,58 @@ class _ReturnSummaryState extends State<ReturnSummary> {
         'return_created',
       );
 
-      // Gửi thông báo đến tất cả người dùng khác
-      await NotificationService.sendNotificationToAll(
-        'Phiếu Trả Hàng Mới',
-        'Có phiếu trả hàng mới: $firstProductName số lượng $totalQuantity',
-        'return_created',
-      );
-
       if (account == 'Công nợ') {
         debugPrint('Updating supplier debt');
-        final currentSupplier = await supabase
-            .from('suppliers')
-            .select('debt_vnd, debt_cny, debt_usd')
-            .eq('name', widget.supplier)
-            .single();
-
-        for (var currency in currencies) {
-          String debtColumn;
-          if (currency == 'VND') {
-            debtColumn = 'debt_vnd';
-          } else if (currency == 'CNY') {
-            debtColumn = 'debt_cny';
-          } else if (currency == 'USD') {
-            debtColumn = 'debt_usd';
-          } else {
-            throw Exception('Loại tiền tệ không được hỗ trợ: $currency');
+        // Nhóm items theo supplier_id
+        final supplierGroups = <String, List<Map<String, dynamic>>>{};
+        for (var item in widget.ticketItems) {
+          final supplierId = item['supplier_id']?.toString();
+          if (supplierId != null && supplierId.isNotEmpty) {
+            supplierGroups.putIfAbsent(supplierId, () => []).add(item);
           }
+        }
 
-          final totalAmount = widget.ticketItems
-              .where((item) => item['currency'] == currency)
-              .fold<double>(0, (sum, item) {
-                final imeiCount = (item['imei'] as String).split(',').where((e) => e.trim().isNotEmpty).length;
-                return sum + (item['price'] as num).toDouble() * imeiCount;
-              });
-
-          final currentDebt = double.tryParse(currentSupplier[debtColumn]?.toString() ?? '0') ?? 0;
-          final updatedDebt = currentDebt - totalAmount;
-
-          await supabase
+        // Cập nhật công nợ cho từng supplier
+        for (var supplierEntry in supplierGroups.entries) {
+          final supplierId = supplierEntry.key;
+          final items = supplierEntry.value;
+          
+          final currentSupplier = await supabase
               .from('suppliers')
-              .update({debtColumn: updatedDebt})
-              .eq('name', widget.supplier);
+              .select('debt_vnd, debt_cny, debt_usd')
+              .eq('id', supplierId)
+              .single();
+
+          // Nhóm các items của supplier này theo currency
+          final currenciesForSupplier = items.map((item) => item['currency'] as String).toSet();
+          
+          for (var currency in currenciesForSupplier) {
+            String debtColumn;
+            if (currency == 'VND') {
+              debtColumn = 'debt_vnd';
+            } else if (currency == 'CNY') {
+              debtColumn = 'debt_cny';
+            } else if (currency == 'USD') {
+              debtColumn = 'debt_usd';
+            } else {
+              throw Exception('Loại tiền tệ không được hỗ trợ: $currency');
+            }
+
+            final totalAmount = items
+                .where((item) => item['currency'] == currency)
+                .fold<double>(0, (sum, item) {
+                  final imeiCount = (item['imei'] as String).split(',').where((e) => e.trim().isNotEmpty).length;
+                  return sum + (item['price'] as num).toDouble() * imeiCount;
+                });
+
+            final currentDebt = double.tryParse(currentSupplier[debtColumn]?.toString() ?? '0') ?? 0;
+            final updatedDebt = currentDebt - totalAmount;
+
+            await supabase
+                .from('suppliers')
+                .update({debtColumn: updatedDebt})
+                .eq('id', supplierId);
+          }
         }
       } else {
         debugPrint('Updating financial account balance');

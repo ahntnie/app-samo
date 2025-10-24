@@ -128,39 +128,6 @@ class _TransportersScreenState extends State<TransportersScreen> {
     );
   }
 
-  void _showEditTransporterDialog(Map<String, dynamic> transporter) {
-    showDialog(
-      context: context,
-      builder: (context) => EditTransporterDialog(
-        transporter: transporter,
-        onSave: (updatedTransporter) async {
-          try {
-            await widget.tenantClient.from('transporters').update({
-              'name': updatedTransporter['name'],
-              'phone': updatedTransporter['phone'],
-              'address': updatedTransporter['address'],
-            }).eq('id', transporter['id']);
-
-            setState(() {
-              final index = transporters.indexWhere((t) => t['id'] == transporter['id']);
-              if (index != -1) {
-                transporters[index] = {...transporters[index], ...updatedTransporter};
-              }
-            });
-
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Đã cập nhật thông tin đơn vị vận chuyển')),
-            );
-          } catch (e) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Lỗi khi cập nhật: $e')),
-            );
-          }
-        },
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     if (isLoading) {
@@ -263,18 +230,9 @@ class _TransportersScreenState extends State<TransportersScreen> {
                           Text('Công nợ: $debtText'),
                         ],
                       ),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton(
-                            icon: const Icon(Icons.edit, color: Colors.orange),
-                            onPressed: () => _showEditTransporterDialog(transporter),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.visibility, color: Colors.blue),
-                            onPressed: () => _showTransporterDetails(transporter),
-                          ),
-                        ],
+                      trailing: IconButton(
+                        icon: const Icon(Icons.visibility, color: Colors.blue),
+                        onPressed: () => _showTransporterDetails(transporter),
                       ),
                     ),
                   );
@@ -284,90 +242,6 @@ class _TransportersScreenState extends State<TransportersScreen> {
           ],
         ),
       ),
-    );
-  }
-}
-
-class EditTransporterDialog extends StatefulWidget {
-  final Map<String, dynamic> transporter;
-  final Function(Map<String, dynamic>) onSave;
-
-  const EditTransporterDialog({super.key, required this.transporter, required this.onSave});
-
-  @override
-  _EditTransporterDialogState createState() => _EditTransporterDialogState();
-}
-
-class _EditTransporterDialogState extends State<EditTransporterDialog> {
-  late TextEditingController nameController;
-  late TextEditingController phoneController;
-  late TextEditingController addressController;
-
-  @override
-  void initState() {
-    super.initState();
-    nameController = TextEditingController(text: widget.transporter['name']?.toString() ?? '');
-    phoneController = TextEditingController(text: widget.transporter['phone']?.toString() ?? '');
-    addressController = TextEditingController(text: widget.transporter['address']?.toString() ?? '');
-  }
-
-  @override
-  void dispose() {
-    nameController.dispose();
-    phoneController.dispose();
-    addressController.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Sửa Thông Tin Đơn Vị Vận Chuyển'),
-      content: SingleChildScrollView(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameController,
-              decoration: const InputDecoration(labelText: 'Tên'),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: phoneController,
-              decoration: const InputDecoration(labelText: 'Số Điện Thoại'),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: addressController,
-              decoration: const InputDecoration(labelText: 'Địa Chỉ'),
-            ),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Hủy'),
-        ),
-        ElevatedButton(
-          onPressed: () {
-            if (nameController.text.isEmpty) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Tên không được để trống!')),
-              );
-              return;
-            }
-            final updatedTransporter = {
-              'name': nameController.text,
-              'phone': phoneController.text,
-              'address': addressController.text,
-            };
-            widget.onSave(updatedTransporter);
-            Navigator.pop(context);
-          },
-          child: const Text('Lưu'),
-        ),
-      ],
     );
   }
 }

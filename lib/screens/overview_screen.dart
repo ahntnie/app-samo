@@ -705,11 +705,24 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
     }
 
     double maxY = spots1.map((e) => e.y).fold(0.0, (a, b) => max(a, b));
+    double minY = spots1.map((e) => e.y).fold(0.0, (a, b) => a < b ? a : b);
     if (spots2 != null) {
       maxY = max(maxY, spots2.map((e) => e.y).fold(0.0, (a, b) => max(a, b)));
+      minY = min(minY, spots2.map((e) => e.y).fold(0.0, (a, b) => a < b ? a : b));
     }
-    maxY = maxY * 1.5;
-    if (maxY == 0) maxY = 1;
+    
+    // Nếu tất cả giá trị đều >= 0, đặt minY = 0 (trục ngang)
+    if (minY >= 0) {
+      minY = 0;
+      maxY = maxY * 1.2; // Thêm padding phía trên
+    } else {
+      // Nếu có giá trị âm, thêm padding cho cả 2 phía
+      final yRange = maxY - minY;
+      maxY = maxY + (yRange * 0.1);
+      minY = minY - (yRange * 0.1);
+    }
+    
+    if (maxY == minY) maxY = minY + 100000;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -725,7 +738,8 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
             child: LineChart(
               LineChartData(
                 maxY: maxY,
-                minY: 0,
+                minY: minY,
+                clipData: const FlClipData.all(),
                 lineBarsData: [
                   LineChartBarData(
                     spots: spots1,
@@ -733,6 +747,8 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
                     color: color1,
                     barWidth: 2,
                     dotData: const FlDotData(show: false),
+                    belowBarData: BarAreaData(show: false),
+                    preventCurveOverShooting: true,
                   ),
                   if (spots2 != null && color2 != null)
                     LineChartBarData(
@@ -741,14 +757,19 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
                       color: color2,
                       barWidth: 2,
                       dotData: const FlDotData(show: false),
+                      belowBarData: BarAreaData(show: false),
+                      preventCurveOverShooting: true,
                     ),
                 ],
                 titlesData: FlTitlesData(
                   leftTitles: AxisTitles(
                     sideTitles: SideTitles(
                       showTitles: true,
-                      interval: maxY / 5,
-                      getTitlesWidget: (val, _) => Text(formatMoney(val), style: const TextStyle(fontSize: 10)),
+                      interval: (maxY - minY) / 5,
+                      reservedSize: 45,
+                      getTitlesWidget: (val, _) {
+                        return Text(formatMoney(val), style: const TextStyle(fontSize: 10));
+                      },
                     ),
                   ),
                   bottomTitles: AxisTitles(
@@ -791,9 +812,7 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
           aspectRatio: 1,
           child: PieChart(
             PieChartData(
-              sections: productDistribution.asMap().entries.map((entry) {
-                final index = entry.key;
-                final data = entry.value;
+              sections: productDistribution.map((data) {
                 return PieChartSectionData(
                   value: data['count'].toDouble(),
                   color: data['color'],
@@ -810,55 +829,25 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           child: Column(
-            children: List.generate(
-              (productDistribution.length + 1) ~/ 2,
-              (index) {
-                final leftIndex = index * 2;
-                final rightIndex = leftIndex + 1;
-                final leftData = productDistribution[leftIndex];
-                final rightData = rightIndex < productDistribution.length ? productDistribution[rightIndex] : null;
-
-                return Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: productDistribution.map((data) {
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: Row(
                   children: [
-                    Expanded(
-                      child: Row(
-                        children: [
-                          Container(
-                            width: 16,
-                            height: 16,
-                            color: leftData['color'],
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            '${leftData['name']} : ${leftData['count']}sp',
-                            style: const TextStyle(fontSize: 14),
-                          ),
-                        ],
-                      ),
+                    Container(
+                      width: 16,
+                      height: 16,
+                      color: data['color'],
                     ),
-                    Expanded(
-                      child: rightData != null
-                          ? Row(
-                              children: [
-                                Container(
-                                  width: 16,
-                                  height: 16,
-                                  color: rightData['color'],
-                                ),
-                                const SizedBox(width: 8),
-                                Text(
-                                  '${rightData['name']} : ${rightData['count']}sp',
-                                  style: const TextStyle(fontSize: 14),
-                                ),
-                              ],
-                            )
-                          : const SizedBox.shrink(),
+                    const SizedBox(width: 8),
+                    Text(
+                      '${data['name']} : ${data['count']}sp',
+                      style: const TextStyle(fontSize: 14),
                     ),
                   ],
-                );
-              },
-            ),
+                ),
+              );
+            }).toList(),
           ),
         ),
       ],

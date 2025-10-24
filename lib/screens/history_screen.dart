@@ -51,6 +51,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
   bool isExporting = false;
   Map<String, String> productMap = {};
   Map<String, String> warehouseMap = {};
+  Map<String, String> customerMap = {};
+  Map<String, String> supplierMap = {};
+  Map<String, String> fixerMap = {};
+  Map<String, String> transporterMap = {};
 
   int pageSize = 50;
   int currentPage = 0;
@@ -101,6 +105,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
       await Future.wait([
         _fetchProducts(),
         _fetchWarehouses(),
+        _fetchCustomers(),
+        _fetchSuppliers(),
+        _fetchFixers(),
+        _fetchTransporters(),
       ]);
 
       if (productMap.isEmpty) {
@@ -152,6 +160,66 @@ class _HistoryScreenState extends State<HistoryScreen> {
     } catch (e) {
       developer.log('warehouses: Error: $e');
       warehouseMap = {};
+    }
+  }
+
+  Future<void> _fetchCustomers() async {
+    try {
+      final response = await widget.tenantClient.from('customers').select('id, name');
+      setState(() {
+        customerMap = Map.fromEntries(
+          response.map((e) => MapEntry(e['id'].toString(), e['name'] as String)),
+        );
+      });
+      developer.log('customers: Loaded ${customerMap.length} customers');
+    } catch (e) {
+      developer.log('customers: Error: $e');
+      customerMap = {};
+    }
+  }
+
+  Future<void> _fetchSuppliers() async {
+    try {
+      final response = await widget.tenantClient.from('suppliers').select('id, name');
+      setState(() {
+        supplierMap = Map.fromEntries(
+          response.map((e) => MapEntry(e['id'].toString(), e['name'] as String)),
+        );
+      });
+      developer.log('suppliers: Loaded ${supplierMap.length} suppliers');
+    } catch (e) {
+      developer.log('suppliers: Error: $e');
+      supplierMap = {};
+    }
+  }
+
+  Future<void> _fetchFixers() async {
+    try {
+      final response = await widget.tenantClient.from('fix_units').select('id, name');
+      setState(() {
+        fixerMap = Map.fromEntries(
+          response.map((e) => MapEntry(e['id'].toString(), e['name'] as String)),
+        );
+      });
+      developer.log('fixers: Loaded ${fixerMap.length} fixers');
+    } catch (e) {
+      developer.log('fixers: Error: $e');
+      fixerMap = {};
+    }
+  }
+
+  Future<void> _fetchTransporters() async {
+    try {
+      final response = await widget.tenantClient.from('transporters').select('id, name');
+      setState(() {
+        transporterMap = Map.fromEntries(
+          response.map((e) => MapEntry(e['id'].toString(), e['name'] as String)),
+        );
+      });
+      developer.log('transporters: Loaded ${transporterMap.length} transporters');
+    } catch (e) {
+      developer.log('transporters: Error: $e');
+      transporterMap = {};
     }
   }
 
@@ -258,6 +326,33 @@ class _HistoryScreenState extends State<HistoryScreen> {
     }
   }
 
+  String _getPartnerName(String? partnerId, String? partnerType, String? partnerName) {
+    // Nếu đã có partner_name thì dùng luôn
+    if (partnerName != null && partnerName.isNotEmpty && partnerName != 'N/A') {
+      return partnerName;
+    }
+    
+    // Nếu không có partner_id hoặc partner_type thì trả về N/A
+    if (partnerId == null || partnerType == null) {
+      return 'N/A';
+    }
+    
+    // Tra cứu tên từ cache dựa vào partner_type
+    switch (partnerType) {
+      case 'suppliers':
+        return supplierMap[partnerId] ?? 'N/A';
+      case 'customers':
+        return customerMap[partnerId] ?? 'N/A';
+      case 'fix_units':
+        return fixerMap[partnerId] ?? 'N/A';
+      case 'transporters':
+        return transporterMap[partnerId] ?? 'N/A';
+      default:
+        return 'N/A';
+    }
+  }
+
+
   String _getDisplayType(String type, String table) {
     String typeKey = type;
     if (table == 'fix_receive_orders') {
@@ -305,7 +400,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         {
           'table': 'financial_orders',
           'key': 'id',
-          'select': 'id, type, created_at, partner_name, amount, currency, iscancelled, from_amount, from_currency, to_amount, to_currency, to_account, partner_type, account',
+          'select': 'id, type, created_at, partner_name, partner_id, amount, currency, iscancelled, from_amount, from_currency, to_amount, to_currency, to_account, partner_type, account',
           'partnerField': 'partner_name',
           'amountField': 'amount',
           'dateField': 'created_at',
@@ -315,7 +410,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         {
           'table': 'fix_receive_orders',
           'key': 'ticket_id',
-          'select': 'ticket_id, created_at, fixer, price, quantity, currency, account, iscancelled, product_id, warehouse_id, imei',
+          'select': 'ticket_id, created_at, fixer, fix_unit_id, price, quantity, currency, account, iscancelled, product_id, warehouse_id, imei',
           'partnerField': 'fixer',
           'amountField': 'price',
           'dateField': 'created_at',
@@ -325,7 +420,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         {
           'table': 'fix_send_orders',
           'key': 'ticket_id',
-          'select': 'ticket_id, created_at, fixer, quantity, iscancelled, product_id, warehouse_id, imei',
+          'select': 'ticket_id, created_at, fixer, fix_unit_id, quantity, iscancelled, product_id, warehouse_id, imei',
           'partnerField': 'fixer',
           'amountField': null,
           'dateField': 'created_at',
@@ -335,7 +430,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         {
           'table': 'import_orders',
           'key': 'id',
-          'select': 'id, created_at, supplier, price, quantity, total_amount, currency, account, iscancelled, product_id, warehouse_id, imei',
+          'select': 'id, created_at, supplier, supplier_id, price, quantity, total_amount, currency, account, iscancelled, product_id, warehouse_id, imei',
           'partnerField': 'supplier',
           'amountField': 'price',
           'dateField': 'created_at',
@@ -365,7 +460,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         {
           'table': 'return_orders',
           'key': 'ticket_id',
-          'select': 'ticket_id, created_at, supplier, price, quantity, total_amount, currency, account, iscancelled, product_id, warehouse_id, imei',
+          'select': 'ticket_id, created_at, supplier, supplier_id, price, quantity, total_amount, currency, account, iscancelled, product_id, warehouse_id, imei',
           'partnerField': 'supplier',
           'amountField': 'price',
           'dateField': 'created_at',
@@ -388,7 +483,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         final tableName = table['table'] as String;
         final select = table['select'] as String;
         final partnerField = table['partnerField'] as String;
-        final amountField = table['amountField'] as String?;
+        final amountField = table['amountField'];
         final dateField = table['dateField'] as String;
         final keyField = table['key'] as String;
 
@@ -455,12 +550,24 @@ class _HistoryScreenState extends State<HistoryScreen> {
           }
 
           if (!groupedTickets.containsKey(ticketKey)) {
+            // Lấy tên đối tác - đặc biệt xử lý cho financial_orders
+            String partnerName;
+            if (tableName == 'financial_orders') {
+              partnerName = _getPartnerName(
+                tx['partner_id']?.toString(),
+                tx['partner_type']?.toString(),
+                tx[partnerField]?.toString(),
+              );
+            } else {
+              partnerName = tx[partnerField]?.toString() ?? 'N/A';
+            }
+            
             groupedTickets[ticketKey] = {
               'table': tableName,
               'key': ticketKeyField,
               'id': ticketKey,
               'type': tableName == 'financial_orders' || tableName == 'transporter_orders' ? (tx['type'] ?? tableName) : tableName,
-              'partner': tx[partnerField]?.toString() ?? 'N/A',
+              'partner': partnerName,
               'date': tx[dateField]?.toString() ?? '',
               'snapshot_data': null,
               'snapshot_created_at': null,
@@ -474,6 +581,18 @@ class _HistoryScreenState extends State<HistoryScreen> {
             };
           }
 
+          // Lấy tên đối tác cho item - đặc biệt xử lý cho financial_orders
+          String itemPartnerName;
+          if (tableName == 'financial_orders') {
+            itemPartnerName = _getPartnerName(
+              tx['partner_id']?.toString(),
+              tx['partner_type']?.toString(),
+              tx[partnerField]?.toString(),
+            );
+          } else {
+            itemPartnerName = tx[partnerField]?.toString() ?? 'N/A';
+          }
+          
           final item = {
             'amount': amountField != null ? num.tryParse(tx[amountField]?.toString() ?? '0') : null,
             'currency': tx['currency']?.toString() ?? 'VND',
@@ -494,6 +613,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
             'imei': tx['imei'],
             'product_name': productName,
             'warehouse_name': warehouseName,
+            'partner': itemPartnerName, // Lưu partner cho từng item
           };
 
           final ticket = groupedTickets[ticketKey]!;
@@ -577,6 +697,15 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
     final isFinancialTicket = ticket['table'] == 'financial_orders';
     final financialType = ticket['type'] as String?;
+    
+    // Kiểm tra nếu có nhiều đối tác khác nhau trong ticket
+    final hasMultiplePartners = ticket['table'] == 'return_orders' || ticket['table'] == 'reimport_orders';
+    final uniquePartners = hasMultiplePartners 
+        ? (ticket['items'] as List).map((item) => item['partner'] as String? ?? 'N/A').toSet()
+        : <String>{};
+    final displayPartner = hasMultiplePartners && uniquePartners.length > 1
+        ? 'Nhiều đối tác (${uniquePartners.length})'
+        : ticket['partner'];
 
     showDialog(
       context: context,
@@ -589,7 +718,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text('Loại Phiếu: ${_getDisplayType(ticket['type'], ticket['table'])}'),
-                Text('Đối tác: ${ticket['partner']}'),
+                Text('Đối tác: $displayPartner'),
                 if (isFinancialTicket && financialType == 'exchange') ...[
                   Text('Số Tiền Đổi: ${_formatNumber(ticket['items'][0]['from_amount'])} ${ticket['items'][0]['from_currency']}'),
                   if (ticket['items'][0]['to_amount'] != null && ticket['items'][0]['to_currency'] != null)
@@ -605,20 +734,19 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 if (ticket['items'][0]['account'] != null && !isFinancialTicket)
                   Text('Tài Khoản: ${ticket['items'][0]['account']}'),
                 if (saleman != null) Text('Nhân viên bán: $saleman'),
-                if (ticket['product_name'] != null && ticket['product_name'] != 'N/A')
-                  Text('Sản phẩm: ${ticket['product_name']}'),
+                if (!isFinancialTicket) ...[
+                  ...ticket['items'].map<Widget>((item) {
+                    final productName = item['product_name']?.toString() ?? 'N/A';
+                    final quantity = item['quantity'] as num? ?? 0;
+                    if (productName != 'N/A' && quantity > 0) {
+                      return Text('Sản phẩm: $productName x${quantity.toInt()}');
+                    }
+                    return const SizedBox.shrink();
+                  }).toList(),
+                ],
                 if (ticket['warehouse_name'] != null && ticket['warehouse_name'] != 'N/A')
                   Text('Kho: ${ticket['warehouse_name']}'),
-                if ((ticket['table'] == 'transporter_orders' ||
-                        ticket['table'] == 'fix_send_orders' ||
-                        ticket['table'] == 'fix_receive_orders' ||
-                        ticket['table'] == 'sale_orders' ||
-                        ticket['table'] == 'return_orders' ||
-                        ticket['table'] == 'reimport_orders' ||
-                        ticket['table'] == 'import_orders') &&
-                    ticket['imei'] != null)
-                  Text('IMEI: ${ticket['imei']}'),
-                if (!isFinancialTicket && ticket['items'].length > 1) ...[
+                if (!isFinancialTicket) ...[
                   const SizedBox(height: 8),
                   const Text('Chi tiết sản phẩm:', style: TextStyle(fontWeight: FontWeight.bold)),
                   ...ticket['items'].asMap().entries.map((entry) {
@@ -627,7 +755,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     return Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Sản phẩm ${entry.key + 1}:'),
+                        if (ticket['items'].length > 1) Text('Sản phẩm ${entry.key + 1}:'),
+                        if (hasMultiplePartners && item['partner'] != null)
+                          Text('  Đối tác: ${item['partner']}'),
                         if (currentTable != 'transporter_orders' && item['quantity'] != null)
                           Text('  Số Lượng: ${item['quantity']}'),
                         if (currentTable == 'transporter_orders' && item['imei'] != null)
@@ -869,25 +999,76 @@ class _HistoryScreenState extends State<HistoryScreen> {
       }
 
       if (snapshotData['suppliers'] != null) {
-        final supplierData = snapshotData['suppliers'] as Map<String, dynamic>;
-        developer.log('restoreSnapshot: Restoring supplier: ${supplierData['name']}');
-        await widget.tenantClient.from('suppliers').update({
-          'debt_vnd': supplierData['debt_vnd'] ?? 0,
-          'debt_cny': supplierData['debt_cny'] ?? 0,
-          'debt_usd': supplierData['debt_usd'] ?? 0,
-        }).eq('name', supplierData['name']);
+        final suppliersData = snapshotData['suppliers'];
+        if (suppliersData is List) {
+          // New format: List of suppliers
+          developer.log('restoreSnapshot: Restoring ${suppliersData.length} suppliers');
+          for (var supplierData in suppliersData) {
+            final supplierId = supplierData['id']?.toString();
+            final supplierName = supplierData['name'];
+            developer.log('restoreSnapshot: Restoring supplier: $supplierName (id: $supplierId)');
+            if (supplierId != null) {
+              await widget.tenantClient.from('suppliers').update({
+                'debt_vnd': supplierData['debt_vnd'] ?? 0,
+                'debt_cny': supplierData['debt_cny'] ?? 0,
+                'debt_usd': supplierData['debt_usd'] ?? 0,
+              }).eq('id', supplierId);
+            } else {
+              // Fallback to name if id not available (for old snapshots)
+              developer.log('restoreSnapshot: Warning - Using name fallback for supplier: $supplierName');
+              await widget.tenantClient.from('suppliers').update({
+                'debt_vnd': supplierData['debt_vnd'] ?? 0,
+                'debt_cny': supplierData['debt_cny'] ?? 0,
+                'debt_usd': supplierData['debt_usd'] ?? 0,
+              }).eq('name', supplierName);
+            }
+          }
+        } else {
+          // Old format: Single supplier as Map (backward compatibility)
+          final supplierData = suppliersData as Map<String, dynamic>;
+          final supplierId = supplierData['id']?.toString();
+          final supplierName = supplierData['name'];
+          developer.log('restoreSnapshot: Restoring supplier: $supplierName (id: $supplierId)');
+          if (supplierId != null) {
+            await widget.tenantClient.from('suppliers').update({
+              'debt_vnd': supplierData['debt_vnd'] ?? 0,
+              'debt_cny': supplierData['debt_cny'] ?? 0,
+              'debt_usd': supplierData['debt_usd'] ?? 0,
+            }).eq('id', supplierId);
+          } else {
+            // Fallback to name if id not available (for old snapshots)
+            developer.log('restoreSnapshot: Warning - Using name fallback for supplier: $supplierName');
+            await widget.tenantClient.from('suppliers').update({
+              'debt_vnd': supplierData['debt_vnd'] ?? 0,
+              'debt_cny': supplierData['debt_cny'] ?? 0,
+              'debt_usd': supplierData['debt_usd'] ?? 0,
+            }).eq('name', supplierName);
+          }
+        }
       }
 
       if (snapshotData['customers'] != null) {
         final customersData = snapshotData['customers'] is List ? snapshotData['customers'] as List<dynamic> : [snapshotData['customers']];
         developer.log('restoreSnapshot: Restoring ${customersData.length} customers');
         for (var customerData in customersData) {
-          developer.log('restoreSnapshot: Restoring customer: ${customerData['name']}');
-          await widget.tenantClient.from('customers').update({
-            'debt_vnd': customerData['debt_vnd'] ?? 0,
-            'debt_cny': customerData['debt_cny'] ?? 0,
-            'debt_usd': customerData['debt_usd'] ?? 0,
-          }).eq('name', customerData['name']);
+          final customerId = customerData['id']?.toString();
+          final customerName = customerData['name'];
+          developer.log('restoreSnapshot: Restoring customer: $customerName (id: $customerId)');
+          if (customerId != null) {
+            await widget.tenantClient.from('customers').update({
+              'debt_vnd': customerData['debt_vnd'] ?? 0,
+              'debt_cny': customerData['debt_cny'] ?? 0,
+              'debt_usd': customerData['debt_usd'] ?? 0,
+            }).eq('id', customerId);
+          } else {
+            // Fallback to name if id not available (for old snapshots)
+            developer.log('restoreSnapshot: Warning - Using name fallback for customer: $customerName');
+            await widget.tenantClient.from('customers').update({
+              'debt_vnd': customerData['debt_vnd'] ?? 0,
+              'debt_cny': customerData['debt_cny'] ?? 0,
+              'debt_usd': customerData['debt_usd'] ?? 0,
+            }).eq('name', customerName);
+          }
         }
       }
 
@@ -928,7 +1109,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
         developer.log('restoreSnapshot: Restoring ${fixUnitsData.length} fix units');
         for (var fixUnitData in fixUnitsData) {
           developer.log('restoreSnapshot: Restoring fix_unit: ${fixUnitData['name']}');
-          await widget.tenantClient.from('fix_units').update(fixUnitData).eq('name', fixUnitData['name']);
+          // Use id if available, otherwise fallback to name
+          if (fixUnitData['id'] != null) {
+            await widget.tenantClient.from('fix_units').update(fixUnitData).eq('id', fixUnitData['id']);
+          } else {
+            await widget.tenantClient.from('fix_units').update(fixUnitData).eq('name', fixUnitData['name']);
+          }
         }
       }
 
@@ -1027,18 +1213,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
       for (var ticket in exportTickets) {
         final tableName = ticket['table'] as String;
         final type = _getDisplayType(ticket['type'], tableName);
-        final partner = ticket['partner'] ?? 'N/A';
-        final productName = ticket['product_name'] ?? 'N/A';
-        final warehouseName = ticket['warehouse_name'] ?? 'N/A';
-        final imei = ticket['imei']?.toString() ?? 'N/A';
-        final amount = ticket['total_amount'] ?? ticket['items'][0]['amount'] ?? 0;
-        final currency = ticket['currency'] ?? ticket['items'][0]['currency'] ?? 'VND';
-        final quantity = tableName == 'transporter_orders' ? ticket['total_quantity'].toString() : _formatNumber(ticket['total_quantity']);
         final date = _formatDate(ticket['date']);
-        final account = (ticket['items'][0]['account'] != null && ticket['type'] != 'exchange' && ticket['type'] != 'payment' && ticket['type'] != 'transfer_fund')
-            ? ticket['items'][0]['account'].toString()
-            : '';
-
+        
         String saleman = '';
         if (tableName == 'sale_orders' && ticket['snapshot_data']?['products'] is List<dynamic>) {
           final products = ticket['snapshot_data']['products'] as List<dynamic>;
@@ -1052,19 +1228,43 @@ class _HistoryScreenState extends State<HistoryScreen> {
           }
         }
 
-        sheet.appendRow([
-          TextCellValue(type),
-          TextCellValue(partner),
-          TextCellValue(productName),
-          TextCellValue(warehouseName),
-          TextCellValue(imei),
-          TextCellValue(_formatNumber(amount)),
-          TextCellValue(currency),
-          TextCellValue(quantity),
-          TextCellValue(date),
-          TextCellValue(account),
-          TextCellValue(saleman),
-        ]);
+        // Create separate rows for each product in the ticket
+        for (var item in ticket['items']) {
+          // Sử dụng partner từ item nếu có (cho return_orders, reimport_orders), nếu không dùng partner chung
+          final itemPartner = item['partner']?.toString() ?? ticket['partner'] ?? 'N/A';
+          final productName = item['product_name']?.toString() ?? 'N/A';
+          final warehouseName = item['warehouse_name']?.toString() ?? 'N/A';
+          final imei = item['imei']?.toString() ?? 'N/A';
+          final amount = item['amount'] ?? item['total_amount'] ?? 0;
+          final currency = item['currency']?.toString() ?? 'VND';
+          final quantity = tableName == 'transporter_orders' 
+              ? (item['imei'] != null ? (item['imei'] as String).split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).length.toString() : '0')
+              : _formatNumber(item['quantity'] ?? 0);
+          final account = (item['account'] != null && ticket['type'] != 'exchange' && ticket['type'] != 'payment' && ticket['type'] != 'transfer_fund')
+              ? item['account'].toString()
+              : '';
+
+          sheet.appendRow([
+            TextCellValue(type),
+            TextCellValue(itemPartner),
+            TextCellValue(productName),
+            TextCellValue(warehouseName),
+            TextCellValue(imei),
+            TextCellValue(_formatNumber(amount)),
+            TextCellValue(currency),
+            TextCellValue(quantity),
+            TextCellValue(date),
+            TextCellValue(account),
+            TextCellValue(saleman),
+          ]);
+        }
+      }
+
+      if (excel.sheets.containsKey('Sheet1')) {
+        excel.delete('Sheet1');
+        print('Sheet1 đã được xóa trước khi xuất file.');
+      } else {
+        print('Không tìm thấy Sheet1 sau khi tạo các sheet.');
       }
 
       Directory downloadsDir;
@@ -1233,6 +1433,15 @@ class _HistoryScreenState extends State<HistoryScreen> {
   Widget _buildTicketCard(Map<String, dynamic> ticket) {
     final isFinancialTicket = ticket['table'] == 'financial_orders';
     final financialType = ticket['type'] as String?;
+    
+    // Kiểm tra nếu có nhiều đối tác khác nhau trong ticket
+    final hasMultiplePartners = ticket['table'] == 'return_orders' || ticket['table'] == 'reimport_orders';
+    final uniquePartners = hasMultiplePartners 
+        ? (ticket['items'] as List).map((item) => item['partner'] as String? ?? 'N/A').toSet()
+        : <String>{};
+    final displayPartner = hasMultiplePartners && uniquePartners.length > 1
+        ? 'Nhiều đối tác (${uniquePartners.length})'
+        : ticket['partner'];
 
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 8),
@@ -1241,7 +1450,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Đối Tác: ${ticket['partner']}'),
+            Text('Đối Tác: $displayPartner'),
             if (isFinancialTicket && financialType == 'exchange')
               Text('Số Tiền: ${_formatNumber(ticket['items'][0]['from_amount'])} ${ticket['items'][0]['from_currency']}')
             else if (isFinancialTicket)
@@ -1252,19 +1461,18 @@ class _HistoryScreenState extends State<HistoryScreen> {
               Text('Số Lượng: ${ticket['table'] == 'transporter_orders' ? ticket['total_quantity'] : _formatNumber(ticket['total_quantity'])}'),
             ],
             Text('Ngày: ${_formatDate(ticket['date'])}'),
-            if (ticket['product_name'] != null && ticket['product_name'] != 'N/A')
-              Text('Sản phẩm: ${ticket['product_name']}'),
+            if (!isFinancialTicket) ...[
+              ...ticket['items'].map<Widget>((item) {
+                final productName = item['product_name']?.toString() ?? 'N/A';
+                final quantity = item['quantity'] as num? ?? 0;
+                if (productName != 'N/A' && quantity > 0) {
+                  return Text('Sản phẩm: $productName x${quantity.toInt()}');
+                }
+                return const SizedBox.shrink();
+              }).toList(),
+            ],
             if (ticket['warehouse_name'] != null && ticket['warehouse_name'] != 'N/A')
               Text('Kho: ${ticket['warehouse_name']}'),
-            if ((ticket['table'] == 'transporter_orders' ||
-                    ticket['table'] == 'fix_send_orders' ||
-                    ticket['table'] == 'fix_receive_orders' ||
-                    ticket['table'] == 'sale_orders' ||
-                    ticket['table'] == 'return_orders' ||
-                    ticket['table'] == 'reimport_orders' ||
-                    ticket['table'] == 'import_orders') &&
-                ticket['imei'] != null)
-              Text('IMEI: ${ticket['imei']}'),
           ],
         ),
         trailing: IconButton(

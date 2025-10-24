@@ -11,11 +11,17 @@ import 'dart:async';
 class CacheUtil {
   static final Map<String, String> productNameCache = {};
   static final Map<String, String> warehouseNameCache = {};
+  static final Map<String, String> supplierNameCache = {};
+  static final Map<String, String> fixerNameCache = {};
 
   static void cacheProductName(String id, String name) => productNameCache[id] = name;
   static void cacheWarehouseName(String id, String name) => warehouseNameCache[id] = name;
+  static void cacheSupplierName(String id, String name) => supplierNameCache[id] = name;
+  static void cacheFixerName(String id, String name) => fixerNameCache[id] = name;
   static String getProductName(String? id) => id != null ? productNameCache[id] ?? 'Không xác định' : 'Không xác định';
   static String getWarehouseName(String? id) => id != null ? warehouseNameCache[id] ?? 'Không xác định' : 'Không xác định';
+  static String getSupplierName(String? id) => id != null ? supplierNameCache[id] ?? 'Không xác định' : 'Không xác định';
+  static String getFixerName(String? id) => id != null ? fixerNameCache[id] ?? 'Không xác định' : 'Không xác định';
 }
 
 class InventoryScreen extends StatefulWidget {
@@ -119,6 +125,23 @@ class _InventoryScreenState extends State<InventoryScreen> {
         CacheUtil.cacheWarehouseName(id, name);
         warehouseNames.add(name);
       }
+      
+      // Fetch supplier name cache
+      final supplierResponse = await widget.tenantClient.from('suppliers').select('id, name');
+      for (var supplier in supplierResponse) {
+        final id = supplier['id'].toString();
+        final name = supplier['name'] as String;
+        CacheUtil.cacheSupplierName(id, name);
+      }
+      
+      // Fetch fixer name cache
+      final fixerResponse = await widget.tenantClient.from('fix_units').select('id, name');
+      for (var fixer in fixerResponse) {
+        final id = fixer['id'].toString();
+        final name = fixer['name'] as String;
+        CacheUtil.cacheFixerName(id, name);
+      }
+      
       setState(() {
         warehouseOptions = warehouseNames;
       });
@@ -145,7 +168,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
       final response = await widget.tenantClient
           .from('products')
-          .select('id, product_id, imei, status, import_date, return_date, fix_price, send_fix_date, transport_fee, transporter, send_transfer_date, import_transfer_date, sale_price, customer_price, transporter_price, sale_date, saleman, note, import_price, import_currency, warehouse_id, customer')
+          .select('id, product_id, imei, status, import_date, return_date, fix_price, send_fix_date, transport_fee, transporter, send_transfer_date, import_transfer_date, sale_price, customer_price, transporter_price, sale_date, saleman, note, import_price, import_currency, warehouse_id, customer, cost_price, supplier_id')
           .range(start, end);
 
       setState(() {
@@ -188,11 +211,31 @@ class _InventoryScreenState extends State<InventoryScreen> {
     try {
       var query = widget.tenantClient
           .from('products')
-          .select('id, product_id, imei, status, import_date, return_date, fix_price, send_fix_date, transport_fee, transporter, send_transfer_date, import_transfer_date, sale_price, customer_price, transporter_price, sale_date, saleman, note, import_price, import_currency, warehouse_id, customer');
+          .select('id, product_id, imei, status, import_date, return_date, fix_price, send_fix_date, transport_fee, transporter, send_transfer_date, import_transfer_date, sale_price, customer_price, transporter_price, sale_date, saleman, note, import_price, import_currency, warehouse_id, customer, cost_price, supplier_id');
 
       final queryText = searchController.text.toLowerCase();
+      
+      // Tìm kiếm theo tên sản phẩm từ cache
+      List<String> matchingProductIds = [];
       if (queryText.isNotEmpty) {
-        query = query.or('imei.ilike.%$queryText%,note.ilike.%$queryText%');
+        // Tìm tất cả product_id có tên chứa queryText
+        CacheUtil.productNameCache.forEach((id, name) {
+          if (name.toLowerCase().contains(queryText)) {
+            matchingProductIds.add(id);
+          }
+        });
+      }
+
+      if (queryText.isNotEmpty) {
+        // Kết hợp tìm kiếm theo IMEI, note, hoặc product_id (từ tên sản phẩm)
+        if (matchingProductIds.isNotEmpty) {
+          // Nếu tìm thấy sản phẩm theo tên, thêm điều kiện tìm theo product_id
+          final productIdConditions = matchingProductIds.map((id) => 'product_id.eq.$id').join(',');
+          query = query.or('imei.ilike.%$queryText%,note.ilike.%$queryText%,$productIdConditions');
+        } else {
+          // Chỉ tìm theo IMEI và note nếu không tìm thấy tên sản phẩm
+          query = query.or('imei.ilike.%$queryText%,note.ilike.%$queryText%');
+        }
       }
 
       if (filterOptions.contains(selectedFilter) &&
@@ -450,11 +493,31 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
       var query = widget.tenantClient
           .from('products')
-          .select('id, product_id, imei, status, import_date, return_date, fix_price, send_fix_date, transport_fee, transporter, send_transfer_date, import_transfer_date, sale_price, customer_price, transporter_price, sale_date, saleman, note, import_price, import_currency, warehouse_id, customer');
+          .select('id, product_id, imei, status, import_date, return_date, fix_price, send_fix_date, transport_fee, transporter, send_transfer_date, import_transfer_date, sale_price, customer_price, transporter_price, sale_date, saleman, note, import_price, import_currency, warehouse_id, customer, cost_price, supplier_id');
 
       final queryText = searchController.text.toLowerCase();
+      
+      // Tìm kiếm theo tên sản phẩm từ cache
+      List<String> matchingProductIds = [];
       if (queryText.isNotEmpty) {
-        query = query.or('imei.ilike.%$queryText%,note.ilike.%$queryText%');
+        // Tìm tất cả product_id có tên chứa queryText
+        CacheUtil.productNameCache.forEach((id, name) {
+          if (name.toLowerCase().contains(queryText)) {
+            matchingProductIds.add(id);
+          }
+        });
+      }
+
+      if (queryText.isNotEmpty) {
+        // Kết hợp tìm kiếm theo IMEI, note, hoặc product_id (từ tên sản phẩm)
+        if (matchingProductIds.isNotEmpty) {
+          // Nếu tìm thấy sản phẩm theo tên, thêm điều kiện tìm theo product_id
+          final productIdConditions = matchingProductIds.map((id) => 'product_id.eq.$id').join(',');
+          query = query.or('imei.ilike.%$queryText%,note.ilike.%$queryText%,$productIdConditions');
+        } else {
+          // Chỉ tìm theo IMEI và note nếu không tìm thấy tên sản phẩm
+          query = query.or('imei.ilike.%$queryText%,note.ilike.%$queryText%');
+        }
       }
 
       if (filterOptions.contains(selectedFilter) &&
@@ -504,6 +567,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
         TextCellValue('IMEI'),
         if (widget.permissions.contains('view_import_price')) TextCellValue('Giá nhập'),
         if (widget.permissions.contains('view_import_price')) TextCellValue('Đơn vị tiền nhập'),
+        if (widget.permissions.contains('view_cost_price')) TextCellValue('Giá vốn'),
         TextCellValue('Ngày gửi sửa'),
         TextCellValue('Trạng thái'),
         TextCellValue('Kho'),
@@ -540,6 +604,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
           TextCellValue(imei),
           if (widget.permissions.contains('view_import_price')) TextCellValue(item['import_price']?.toString() ?? ''),
           if (widget.permissions.contains('view_import_price')) TextCellValue(item['import_currency']?.toString() ?? ''),
+          if (widget.permissions.contains('view_cost_price')) TextCellValue(item['cost_price']?.toString() ?? ''),
           TextCellValue(item['send_fix_date']?.toString() ?? ''),
           TextCellValue(item['status']?.toString() ?? ''),
           TextCellValue(CacheUtil.getWarehouseName(item['warehouse_id']?.toString())),
@@ -620,7 +685,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
     String? supplier;
 
     if (widget.permissions.contains('view_supplier')) {
-      supplier = await _fetchSupplierFromImportOrders(productNameId ?? '', imei);
+      final supplierId = product['supplier_id']?.toString();
+      supplier = supplierId != null ? CacheUtil.getSupplierName(supplierId) : null;
     }
 
     final details = <String, String?>{
@@ -629,6 +695,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
       'Trạng thái': product['status']?.toString(),
       if (widget.permissions.contains('view_import_price'))
         'Giá nhập': product['import_price'] != null ? '${product['import_price']} ${product['import_currency'] ?? ''}' : null,
+      if (widget.permissions.contains('view_cost_price'))
+        'Giá vốn': product['cost_price'] != null ? product['cost_price'].toString() : null,
       'Ngày nhập': product['import_date']?.toString(),
       if (widget.permissions.contains('view_supplier') && supplier != null)
         'Nhà cung cấp': supplier,

@@ -69,14 +69,14 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
       final supabase = widget.tenantClient;
       switch (selectedType) {
         case 'Danh mục sản phẩm':
-          final response = await supabase.from('categories').select('id, name').limit(10);
+          final response = await supabase.from('categories').select('id, name').order('name', ascending: true);
           setState(() {
             items = response;
             isLoading = false;
           });
           break;
         case 'Sản phẩm':
-          final response = await supabase.from('products_name').select('id, products').limit(10);
+          final response = await supabase.from('products_name').select('id, products').order('products', ascending: true);
           productNameCache.addAll({
             for (var item in response) item['id'].toString(): item['products']
           });
@@ -86,14 +86,14 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
           });
           break;
         case 'Tài khoản thanh toán':
-          final response = await supabase.from('financial_accounts').select('id, name, balance, currency').limit(10);
+          final response = await supabase.from('financial_accounts').select('id, name, balance, currency').order('name', ascending: true);
           setState(() {
             items = response;
             isLoading = false;
           });
           break;
         case 'Chi nhánh':
-          final response = await supabase.from('warehouses').select('id, name, type').limit(10);
+          final response = await supabase.from('warehouses').select('id, name, type').order('name', ascending: true);
           warehouseNameCache.addAll({
             for (var item in response) item['id'].toString(): item['name']
           });
@@ -103,7 +103,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
           });
           break;
       }
-      print('Fetched $selectedType items: $items'); // Debug
+      print('Fetched $selectedType items: ${items.length}'); // Debug
     } catch (e) {
       print('Error fetching items: $e'); // Debug
       setState(() {

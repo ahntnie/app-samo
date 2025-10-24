@@ -425,6 +425,109 @@ class _FixReceiveFormState extends State<FixReceiveForm> {
     }
   }
 
+  Future<void> _showAutoImeiDialog() async {
+    if (productId == null) {
+      await showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Thông báo'),
+          content: const Text('Vui lòng chọn sản phẩm trước!'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Đóng'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    int quantity = 0;
+
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Tự động lấy IMEI'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Số lượng máy nhận về'),
+              onChanged: (val) => quantity = int.tryParse(val) ?? 0,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Hủy'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              if (quantity > 0) {
+                await _fetchImeisForQuantity(quantity);
+              }
+            },
+            child: const Text('Xác nhận'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _fetchImeisForQuantity(int quantity) async {
+    if (productId == null || quantity <= 0) return;
+
+    try {
+      final supabase = widget.tenantClient;
+      final response = await retry(
+        () => supabase
+            .from('products')
+            .select('imei')
+            .eq('product_id', productId!)
+            .eq('status', 'Đang sửa')
+            .limit(quantity),
+        operation: 'Fetch IMEIs for auto',
+      );
+
+      final imeiListFromDb = response
+          .map((e) => e['imei'] as String?)
+          .whereType<String>()
+          .where((imei) => !imeiList.contains(imei))
+          .toList()
+        ..sort();
+
+      if (imeiListFromDb.length < quantity) {
+        if (mounted) {
+          await showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Thông báo'),
+              content: Text('Số lượng sản phẩm không đủ! Chỉ có ${imeiListFromDb.length} sản phẩm "${CacheUtil.getProductName(productId)}" đang sửa.'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Đóng'),
+                ),
+              ],
+            ),
+          );
+        }
+      }
+
+      if (mounted && imeiListFromDb.isNotEmpty) {
+        setState(() {
+          imeiList.addAll(imeiListFromDb);
+        });
+      }
+    } catch (e) {
+      debugPrint('Error fetching IMEIs: $e');
+    }
+  }
+
   void addToTicket(BuildContext scaffoldContext) async {
     if (productId == null || price == null || currency == null || warehouseId == null || imeiList.isEmpty) {
       if (mounted) {
@@ -512,6 +615,7 @@ class _FixReceiveFormState extends State<FixReceiveForm> {
 
     final supabase = widget.tenantClient;
     String? fixer;
+    String? fixerId;
     try {
       final response = await retry(
         () => supabase
@@ -534,6 +638,19 @@ class _FixReceiveFormState extends State<FixReceiveForm> {
       }
       if (fixUnits.length == 1 && fixUnits.first != null) {
         fixer = fixUnits.first;
+        
+        // Fetch fix_unit_id from fix_units table
+        final fixerData = await retry(
+          () => supabase
+              .from('fix_units')
+              .select('id, name')
+              .eq('name', fixer!)
+              .maybeSingle(),
+          operation: 'Fetch fixer id',
+        );
+        if (fixerData != null) {
+          fixerId = fixerData['id']?.toString();
+        }
       } else {
         throw Exception('Không tìm thấy đơn vị sửa cho các IMEI này!');
       }
@@ -558,6 +675,7 @@ class _FixReceiveFormState extends State<FixReceiveForm> {
 
     final item = {
       'fixer': fixer,
+      'fixer_id': fixerId,
       'product_id': productId!,
       'product_name': CacheUtil.getProductName(productId),
       'imei': imeiList.join(','),
@@ -895,13 +1013,13 @@ class _FixReceiveFormState extends State<FixReceiveForm> {
                       },
                     ),
                   ),
-                  // 2 nút quét
+                  // 3 nút quét
                   Row(
                     children: [
                       // Nút quét QR (màu vàng)
                       Expanded(
                         child: Container(
-                          height: 24, // Chiều cao bằng 1/2 của phần còn lại
+                          height: 24,
                           margin: const EdgeInsets.only(right: 4),
                           child: ElevatedButton.icon(
                             onPressed: _scanQRCode,
@@ -921,14 +1039,34 @@ class _FixReceiveFormState extends State<FixReceiveForm> {
                       // Nút quét Text (màu xanh lá cây)
                       Expanded(
                         child: Container(
-                          height: 24, // Chiều cao bằng 1/2 của phần còn lại
-                          margin: const EdgeInsets.only(left: 4),
+                          height: 24,
+                          margin: const EdgeInsets.symmetric(horizontal: 4),
                           child: ElevatedButton.icon(
                             onPressed: _scanText,
                             icon: const Icon(Icons.text_fields, size: 16),
                             label: const Text('IMEI', style: TextStyle(fontSize: 12)),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.green,
+                              foregroundColor: Colors.white,
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                      // Nút Auto IMEI (màu xanh dương)
+                      Expanded(
+                        child: Container(
+                          height: 24,
+                          margin: const EdgeInsets.only(left: 4),
+                          child: ElevatedButton.icon(
+                            onPressed: _showAutoImeiDialog,
+                            icon: const Icon(Icons.flash_on, size: 16),
+                            label: const Text('Auto', style: TextStyle(fontSize: 12)),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.blue,
                               foregroundColor: Colors.white,
                               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                               shape: RoundedRectangleBorder(

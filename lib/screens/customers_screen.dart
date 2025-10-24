@@ -585,22 +585,21 @@ class _CustomerDetailsDialogState extends State<CustomerDetailsDialog> {
     });
 
     try {
+      final customerId = widget.customer['id']?.toString().trim() ?? '';
       final customerName = widget.customer['name']?.toString().trim() ?? '';
-      developer.log('Fetching transactions for customer: "$customerName"');
-      final start = currentPage * pageSize;
-      final end = start + pageSize - 1;
+      developer.log('Fetching transactions for customer: "$customerName" (id: $customerId)');
 
       final saleOrdersQuery = widget.tenantClient
           .from('sale_orders')
           .select('id, product_id, imei, quantity, price, currency, created_at, account, note, customer_price, transporter_price, transporter, warehouse_id')
-          .eq('customer', customerName)
+          .eq('customer_id', customerId)
           .eq('iscancelled', false);
 
       final financialOrdersQuery = widget.tenantClient
           .from('financial_orders')
           .select('id, amount, currency, created_at, account, note')
-          .eq('partner_type', 'Khách hàng')
-          .eq('partner_name', customerName)
+          .eq('partner_type', 'customers')
+          .eq('partner_id', customerId)
           .eq('iscancelled', false);
 
       final reimportOrdersQuery = widget.tenantClient
@@ -719,19 +718,20 @@ class _CustomerDetailsDialogState extends State<CustomerDetailsDialog> {
     try {
       List<Map<String, dynamic>> exportTransactions = filteredTransactions;
       if (hasMoreData && startDate == null && endDate == null) {
+        final customerId = widget.customer['id']?.toString().trim() ?? '';
         final customerName = widget.customer['name']?.toString().trim() ?? '';
 
         final saleOrdersFuture = widget.tenantClient
             .from('sale_orders')
             .select('id, product_id, imei, quantity, price, currency, created_at, account, note, customer_price, transporter_price, transporter, warehouse_id')
-            .eq('customer', customerName)
+            .eq('customer_id', customerId)
             .eq('iscancelled', false);
 
         final financialOrdersFuture = widget.tenantClient
             .from('financial_orders')
             .select('id, amount, currency, created_at, account, note')
-            .eq('partner_type', 'Khách hàng')
-            .eq('partner_name', customerName)
+            .eq('partner_type', 'customers')
+            .eq('partner_id', customerId)
             .eq('iscancelled', false);
 
         final reimportOrdersFuture = widget.tenantClient
@@ -772,6 +772,35 @@ class _CustomerDetailsDialogState extends State<CustomerDetailsDialog> {
 
       Sheet sheet = excel['GiaoDichKhachHang'];
 
+      // Thêm thông tin khách hàng
+      final customerName = widget.customer['name']?.toString() ?? '';
+      final customerPhone = widget.customer['phone']?.toString() ?? '';
+      final customerAddress = widget.customer['address']?.toString() ?? '';
+      final debtVnd = widget.customer['debt_vnd'] as num? ?? 0;
+      final debtCny = widget.customer['debt_cny'] as num? ?? 0;
+      final debtUsd = widget.customer['debt_usd'] as num? ?? 0;
+      final debtDetails = <String>[];
+      if (debtVnd != 0) debtDetails.add('${formatNumber(debtVnd)} VND');
+      if (debtCny != 0) debtDetails.add('${formatNumber(debtCny)} CNY');
+      if (debtUsd != 0) debtDetails.add('${formatNumber(debtUsd)} USD');
+      final debtText = debtDetails.isNotEmpty ? debtDetails.join(', ') : '0 VND';
+
+      sheet.cell(CellIndex.indexByString("A1")).value = TextCellValue('Tên khách hàng: $customerName');
+      sheet.cell(CellIndex.indexByString("A2")).value = TextCellValue('Số điện thoại: $customerPhone');
+      sheet.cell(CellIndex.indexByString("A3")).value = TextCellValue('Địa chỉ: $customerAddress');
+      sheet.cell(CellIndex.indexByString("A4")).value = TextCellValue('Công nợ: $debtText');
+      
+      int currentRow = 5;
+      
+      // Thêm thông tin bộ lọc thời gian nếu có
+      if (startDate != null && endDate != null) {
+        final startDateStr = formatDate(startDate!.toIso8601String());
+        final endDateStr = formatDate(endDate!.toIso8601String());
+        sheet.cell(CellIndex.indexByString("A$currentRow")).value = TextCellValue('Thời gian: Từ $startDateStr đến $endDateStr');
+        currentRow++;
+      }
+
+      // Thêm tiêu đề bảng
       List<TextCellValue> headers = [
         TextCellValue('Loại giao dịch'),
         TextCellValue('Ngày'),
@@ -790,7 +819,11 @@ class _CustomerDetailsDialogState extends State<CustomerDetailsDialog> {
         TextCellValue('Ghi chú'),
       ];
 
-      sheet.appendRow(headers);
+      for (int i = 0; i < headers.length; i++) {
+        final columnLetter = String.fromCharCode(65 + i);
+        sheet.cell(CellIndex.indexByString("${columnLetter}$currentRow")).value = headers[i];
+      }
+      currentRow++;
 
       for (int i = 0; i < exportTransactions.length; i++) {
         final transaction = exportTransactions[i];
@@ -836,7 +869,18 @@ class _CustomerDetailsDialogState extends State<CustomerDetailsDialog> {
           TextCellValue(note),
         ];
 
-        sheet.appendRow(row);
+        for (int j = 0; j < row.length; j++) {
+          final columnLetter = String.fromCharCode(65 + j);
+          sheet.cell(CellIndex.indexByString("${columnLetter}$currentRow")).value = row[j];
+        }
+        currentRow++;
+      }
+
+      if (excel.sheets.containsKey('Sheet1')) {
+        excel.delete('Sheet1');
+        print('Sheet1 đã được xóa trước khi xuất file.');
+      } else {
+        print('Không tìm thấy Sheet1 sau khi tạo các sheet.');
       }
 
       Directory downloadsDir;
@@ -850,8 +894,8 @@ class _CustomerDetailsDialogState extends State<CustomerDetailsDialog> {
       }
 
       final now = DateTime.now();
-      final customerName = widget.customer['name']?.toString() ?? 'Unknown';
-      final fileName = 'Báo Cáo Giao Dịch Khách Hàng $customerName ${now.day}_${now.month}_${now.year} ${now.hour}_${now.minute}_${now.second}.xlsx';
+      final customerNameForFile = widget.customer['name']?.toString() ?? 'Unknown';
+      final fileName = 'Báo Cáo Giao Dịch Khách Hàng $customerNameForFile ${now.day}_${now.month}_${now.year} ${now.hour}_${now.minute}_${now.second}.xlsx';
       final filePath = '${downloadsDir.path}/$fileName';
       final file = File(filePath);
 

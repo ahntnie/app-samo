@@ -63,7 +63,7 @@ class _LoginScreenState extends State<LoginScreen> {
             await _saveTenantData(url, anonKey);
             
             if (mounted) {
-              goToHome(tenantClient);
+              goToHome(tenantClient, url, anonKey);
               return;
             }
           }
@@ -159,7 +159,7 @@ class _LoginScreenState extends State<LoginScreen> {
           await _saveCredentials();
           
           if (mounted) {
-            goToHome(tenantClient);
+            goToHome(tenantClient, url, anonKey);
           }
         } else {
           setState(() {
@@ -221,14 +221,18 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   // Chuyển đến màn hình Home, truyền SupabaseClient của dự án phụ
-  void goToHome(SupabaseClient tenantClient) {
+  void goToHome(SupabaseClient tenantClient, String url, String anonKey) {
     if (!mounted) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          builder: (_) => HomeScreen(tenantClient: tenantClient),
+          builder: (_) => HomeScreen(
+            tenantClient: tenantClient,
+            tenantUrl: url,
+            tenantAnonKey: anonKey,
+          ),
         ),
       );
     });

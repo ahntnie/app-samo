@@ -21,8 +21,15 @@ import 'package:firebase_core/firebase_core.dart';
 
 class HomeScreen extends StatefulWidget {
   final SupabaseClient tenantClient;
+  final String? tenantUrl;
+  final String? tenantAnonKey;
 
-  const HomeScreen({super.key, required this.tenantClient});
+  const HomeScreen({
+    super.key,
+    required this.tenantClient,
+    this.tenantUrl,
+    this.tenantAnonKey,
+  });
 
   @override
   _HomeScreenState createState() => _HomeScreenState();
@@ -65,6 +72,7 @@ class _HomeScreenState extends State<HomeScreen> {
     'access_fixers_screen',
     'access_history_screen',
     'view_import_price',
+    'view_cost_price',
     'view_supplier',
     'view_sale_price',
     'view_customer',
@@ -91,7 +99,11 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _initializeNotifications() async {
     print('Initializing NotificationService...');
     await Firebase.initializeApp();
-    await NotificationService.init(widget.tenantClient);
+    await NotificationService.init(
+      widget.tenantClient,
+      tenantUrl: widget.tenantUrl,
+      tenantAnonKey: widget.tenantAnonKey,
+    );
   }
 
   Future<void> _loadSavedPreferences() async {
@@ -118,6 +130,46 @@ class _HomeScreenState extends State<HomeScreen> {
       usernameController.text = savedUsername;
       passwordController.text = savedPassword;
       await loginSubAccount();
+    } else {
+      // Kiểm tra nếu tài khoản chính là admin
+      await _checkAdminAccount();
+    }
+  }
+
+  Future<void> _checkAdminAccount() async {
+    try {
+      final user = Supabase.instance.client.auth.currentUser;
+      if (user != null) {
+        // Giả định email admin là một giá trị cụ thể, ví dụ: 'admin@example.com'
+        // Hoặc kiểm tra logic khác để xác định tài khoản admin
+        final adminEmail = 'admin@example.com'; // Thay bằng email admin thực tế
+        if (user.email == adminEmail) {
+          // Tìm tài khoản phụ admin trong sub_accounts
+          final response = await widget.tenantClient
+              .from('sub_accounts')
+              .select('id, username, password_hash, permissions')
+              .eq('username', 'admin')
+              .maybeSingle();
+
+          if (response != null) {
+            setState(() {
+              loggedInUsername = response['username'].toString();
+              permissions = allPermissions; // Gán toàn bộ quyền cho admin
+              isSubAccountLoggedIn = true;
+            });
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setBool('has_database_session', true);
+            if (rememberMe) {
+              await prefs.setString('home_username', 'admin');
+              // Lưu ý: Không lưu mật khẩu thật trong thực tế, đây chỉ là ví dụ
+              await prefs.setString('home_password', 'admin_password');
+              await prefs.setBool('home_rememberPassword', true);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      print('Error checking admin account: $e');
     }
   }
 
@@ -164,15 +216,25 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       }
 
+      // Nếu là admin, đảm bảo có tất cả quyền
+      var userPermissions = (response['permissions'] as List<dynamic>?)?.map((perm) => perm.toString()).toList() ?? [];
+      if (response['username'].toString().toLowerCase() == 'admin') {
+        if (!userPermissions.every((perm) => allPermissions.contains(perm))) {
+          await widget.tenantClient
+              .from('sub_accounts')
+              .update({'permissions': allPermissions})
+              .eq('username', 'admin');
+          userPermissions = allPermissions;
+        }
+      }
+
       await _savePreferences();
-      // Đánh dấu có session cơ sở dữ liệu
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('has_database_session', true);
       
       setState(() {
         loggedInUsername = response['username'].toString();
-        var rawPermissions = response['permissions'] ?? [];
-        permissions = (rawPermissions as List<dynamic>).map((perm) => perm.toString()).toList();
+        permissions = userPermissions;
         print('Permissions set for user $loggedInUsername: $permissions');
         isSubAccountLoggedIn = true;
         isLoading = false;
@@ -221,7 +283,6 @@ class _HomeScreenState extends State<HomeScreen> {
       passwordController.clear();
     });
     
-    // Quay về màn hình login chính
     Navigator.pushReplacementNamed(context, '/');
   }
 
@@ -299,7 +360,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white),
                       ),
                     ),
-                    const SizedBox(width: 48), // Để cân bằng với nút back
+                    const SizedBox(width: 48),
                   ],
                 ),
                 const SizedBox(height: 8),

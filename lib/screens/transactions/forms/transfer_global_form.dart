@@ -12,9 +12,12 @@ import '../../text_scanner_screen.dart';
 // Utility class for caching product names
 class CacheUtil {
   static final Map<String, String> productNameCache = {};
+  static final Map<String, String> warehouseNameCache = {};
 
   static void cacheProductName(String id, String name) => productNameCache[id] = name;
   static String getProductName(String? id) => id != null ? productNameCache[id] ?? 'Không xác định' : 'Không xác định';
+  static void cacheWarehouseName(String id, String name) => warehouseNameCache[id] = name;
+  static String getWarehouseName(String? id) => id != null ? warehouseNameCache[id] ?? 'Không xác định' : 'Không xác định';
 }
 
 // Constants for IMEI handling
@@ -40,6 +43,7 @@ class _TransferGlobalFormState extends State<TransferGlobalForm> {
   List<String> transporters = [];
   List<Map<String, dynamic>> products = [];
   List<String> availableImeis = [];
+  List<Map<String, dynamic>> warehouses = [];
   bool isLoading = true;
   bool isSubmitting = false;
   String? errorMessage;
@@ -97,10 +101,29 @@ class _TransferGlobalFormState extends State<TransferGlobalForm> {
           .toList()
         ..sort((a, b) => (a['name'] as String).toLowerCase().compareTo((b['name'] as String).toLowerCase()));
 
+      // Fetch warehouses
+      final warehouseResponse = await supabase
+          .from('warehouses')
+          .select('id, name');
+      final warehouseList = warehouseResponse
+          .map((e) {
+            final id = e['id'] as String?;
+            final name = e['name'] as String?;
+            if (id != null && name != null) {
+              CacheUtil.cacheWarehouseName(id, name);
+              return {'id': id, 'name': name};
+            }
+            return null;
+          })
+          .whereType<Map<String, dynamic>>()
+          .toList()
+        ..sort((a, b) => (a['name'] ?? '').toLowerCase().compareTo((b['name'] ?? '')));
+
       if (mounted) {
         setState(() {
           transporters = transporterList;
           products = productList;
+          warehouses = warehouseList;
           isLoading = false;
           for (var product in productList) {
             CacheUtil.cacheProductName(product['id'] as String, product['name'] as String);
@@ -343,6 +366,167 @@ class _TransferGlobalFormState extends State<TransferGlobalForm> {
     }
   }
 
+  // Show Auto IMEI dialog
+  Future<void> _showAutoImeiDialog() async {
+    int? localQuantity;
+    String? localWarehouseId;
+    final TextEditingController localQuantityController = TextEditingController();
+    final TextEditingController localWarehouseController = TextEditingController();
+
+    await showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Auto IMEI'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextFormField(
+                controller: localQuantityController,
+                keyboardType: TextInputType.number,
+                onChanged: (val) {
+                  localQuantity = int.tryParse(val);
+                },
+                decoration: const InputDecoration(
+                  labelText: 'Số lượng',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Autocomplete<Map<String, dynamic>>(
+                optionsBuilder: (TextEditingValue textEditingValue) {
+                  final query = textEditingValue.text.toLowerCase();
+                  if (query.isEmpty) return warehouses.take(10).toList();
+                  final filtered = warehouses
+                      .where((option) => (option['name'] as String).toLowerCase().contains(query))
+                      .toList()
+                    ..sort((a, b) => (a['name'] as String).toLowerCase().compareTo((b['name'] as String).toLowerCase()));
+                  return filtered.isNotEmpty ? filtered.take(10).toList() : [{'id': '', 'name': 'Không tìm thấy kho'}];
+                },
+                displayStringForOption: (option) => option['name'] as String,
+                onSelected: (val) {
+                  if (val['id'].isEmpty) return;
+                  localWarehouseId = val['id'] as String;
+                  localWarehouseController.text = val['name'] as String;
+                },
+                fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
+                  controller.text = localWarehouseController.text;
+                  return TextFormField(
+                    controller: controller,
+                    focusNode: focusNode,
+                    onChanged: (value) {
+                      localWarehouseController.text = value;
+                    },
+                    decoration: const InputDecoration(
+                      labelText: 'Kho gửi đi',
+                      border: OutlineInputBorder(),
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Hủy'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              if (localQuantity == null || localQuantity! <= 0) {
+                showDialog(
+                  context: dialogContext,
+                  builder: (ctx) => AlertDialog(
+                    title: const Text('Thông báo'),
+                    content: const Text('Vui lòng nhập số lượng hợp lệ!'),
+                    actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Đóng'))],
+                  ),
+                );
+                return;
+              }
+              if (localWarehouseId == null || localWarehouseId!.trim().isEmpty) {
+                showDialog(
+                  context: dialogContext,
+                  builder: (ctx) => AlertDialog(
+                    title: const Text('Thông báo'),
+                    content: const Text('Vui lòng chọn kho gửi đi!'),
+                    actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Đóng'))],
+                  ),
+                );
+                return;
+              }
+              Navigator.pop(dialogContext);
+              await _autoFetchImeis(localQuantity!, localWarehouseId!);
+            },
+            child: const Text('Tìm'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Auto fetch IMEIs based on quantity and warehouse
+  Future<void> _autoFetchImeis(int qty, String warehouseId) async {
+    setState(() {
+      isLoading = true;
+    });
+
+    try {
+      final supabase = widget.tenantClient;
+      final response = await supabase
+          .from('products')
+          .select('imei')
+          .eq('product_id', productId!)
+          .eq('warehouse_id', warehouseId)
+          .eq('status', 'Tồn kho')
+          .order('import_date', ascending: true)
+          .limit(qty);
+
+      final fetchedImeis = response
+          .map((e) => e['imei'] as String?)
+          .whereType<String>()
+          .where((imei) => !imeiList.contains(imei))
+          .toList();
+
+      if (fetchedImeis.length < qty) {
+        if (mounted) {
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Thông báo'),
+              content: Text('Kho ${CacheUtil.getWarehouseName(warehouseId)} chỉ có ${fetchedImeis.length} sản phẩm "${CacheUtil.getProductName(productId)}" ở trạng thái Tồn kho. Không đủ số lượng $qty.'),
+              actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Đóng'))],
+            ),
+          );
+        }
+        setState(() {
+          isLoading = false;
+        });
+        return;
+      }
+
+      setState(() {
+        imeiList = fetchedImeis;
+        isLoading = false;
+      });
+    } catch (e) {
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Lỗi'),
+            content: Text('$e'),
+            actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Đóng'))],
+          ),
+        );
+      }
+      setState(() {
+        isLoading = false;
+      });
+    }
+  }
+
   // Show confirmation dialog
   void showConfirmDialog() {
     if (isSubmitting) return;
@@ -496,13 +680,6 @@ class _TransferGlobalFormState extends State<TransferGlobalForm> {
         'transfer_global_created',
       );
 
-      // Gửi thông báo đến tất cả người dùng khác
-      await NotificationService.sendNotificationToAll(
-        "Phiếu Vận Chuyển Quốc Tế Mới",
-        "Có phiếu vận chuyển quốc tế mới: ${CacheUtil.getProductName(productId)} số lượng ${formatNumberLocal(imeiList.length)}",
-        'transfer_global_created',
-      );
-
       if (mounted) {
         await showDialog(
           context: context,
@@ -653,71 +830,96 @@ class _TransferGlobalFormState extends State<TransferGlobalForm> {
                 },
               ),
             ),
-            wrapField(
-              Autocomplete<Map<String, dynamic>>(
-                optionsBuilder: (TextEditingValue textEditingValue) {
-                  final query = textEditingValue.text.toLowerCase();
-                  if (query.isEmpty) return products.take(10).toList();
-                  final filtered = products
-                      .where((option) => (option['name'] as String).toLowerCase().contains(query))
-                      .toList()
-                    ..sort((a, b) {
-                      final aName = (a['name'] as String).toLowerCase();
-                      final bName = (b['name'] as String).toLowerCase();
-                      final aStartsWith = aName.startsWith(query);
-                      final bStartsWith = bName.startsWith(query);
-                      if (aStartsWith != bStartsWith) {
-                        return aStartsWith ? -1 : 1;
-                      }
-                      final aIndex = aName.indexOf(query);
-                      final bIndex = bName.indexOf(query);
-                      if (aIndex != bIndex) {
-                        return aIndex - bIndex;
-                      }
-                      return aName.compareTo(bName);
-                    });
-                  return filtered.isNotEmpty ? filtered.take(10).toList() : [{'id': '', 'name': 'Không tìm thấy sản phẩm'}];
-                },
-                displayStringForOption: (option) => option['name'] as String,
-                onSelected: (val) {
-                  if (val['id'].isNotEmpty) {
-                    setState(() {
-                      productId = val['id'] as String;
-                      productController.text = val['name'] as String;
-                      imei = '';
-                      imeiController.text = '';
-                      imeiError = null;
-                      imeiList = [];
-                    });
-                    _fetchAvailableImeis('');
-                  }
-                },
-                fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
-                  controller.text = productController.text;
-                  return TextField(
-                    controller: controller,
-                    focusNode: focusNode,
-                    onChanged: (value) {
-                      setState(() {
-                        productController.text = value;
-                        if (value.isEmpty) {
-                          productId = null;
+            Stack(
+              children: [
+                // Ô sản phẩm chiếm toàn bộ chiều ngang
+                wrapField(
+                  Autocomplete<Map<String, dynamic>>(
+                    optionsBuilder: (TextEditingValue textEditingValue) {
+                      final query = textEditingValue.text.toLowerCase();
+                      if (query.isEmpty) return products.take(10).toList();
+                      final filtered = products
+                          .where((option) => (option['name'] as String).toLowerCase().contains(query))
+                          .toList()
+                        ..sort((a, b) {
+                          final aName = (a['name'] as String).toLowerCase();
+                          final bName = (b['name'] as String).toLowerCase();
+                          final aStartsWith = aName.startsWith(query);
+                          final bStartsWith = bName.startsWith(query);
+                          if (aStartsWith != bStartsWith) {
+                            return aStartsWith ? -1 : 1;
+                          }
+                          final aIndex = aName.indexOf(query);
+                          final bIndex = bName.indexOf(query);
+                          if (aIndex != bIndex) {
+                            return aIndex - bIndex;
+                          }
+                          return aName.compareTo(bName);
+                        });
+                      return filtered.isNotEmpty ? filtered.take(10).toList() : [{'id': '', 'name': 'Không tìm thấy sản phẩm'}];
+                    },
+                    displayStringForOption: (option) => option['name'] as String,
+                    onSelected: (val) {
+                      if (val['id'].isNotEmpty) {
+                        setState(() {
+                          productId = val['id'] as String;
+                          productController.text = val['name'] as String;
                           imei = '';
                           imeiController.text = '';
                           imeiError = null;
                           imeiList = [];
-                        }
-                      });
+                        });
+                        _fetchAvailableImeis('');
+                      }
                     },
-                    onEditingComplete: onFieldSubmitted,
-                    decoration: const InputDecoration(
-                      labelText: 'Sản phẩm',
-                      border: InputBorder.none,
-                      isDense: true,
+                    fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
+                      controller.text = productController.text;
+                      return TextField(
+                        controller: controller,
+                        focusNode: focusNode,
+                        onChanged: (value) {
+                          setState(() {
+                            productController.text = value;
+                            if (value.isEmpty) {
+                              productId = null;
+                              imei = '';
+                              imeiController.text = '';
+                              imeiError = null;
+                              imeiList = [];
+                            }
+                          });
+                        },
+                        onEditingComplete: onFieldSubmitted,
+                        decoration: const InputDecoration(
+                          labelText: 'Sản phẩm',
+                          border: InputBorder.none,
+                          isDense: true,
+                        ),
+                      );
+                    },
+                  ),
+                ),
+                // Nút Auto IMEI nằm đè lên góc phải
+                Positioned(
+                  right: 8,
+                  top: 0,
+                  bottom: 0,
+                  child: Center(
+                    child: ElevatedButton(
+                      onPressed: productId != null ? _showAutoImeiDialog : null,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blue,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                      ),
+                      child: const Text('Auto IMEI', style: TextStyle(fontSize: 12)),
                     ),
-                  );
-                },
-              ),
+                  ),
+                ),
+              ],
             ),
             wrapField(
               Column(
@@ -1131,14 +1333,8 @@ class _TransferGlobalFormState extends State<TransferGlobalForm> {
           'transfer_global_created',
         );
 
-        // Gửi thông báo đến tất cả người dùng khác
-        await NotificationService.sendNotificationToAll(
-          'Phiếu Chuyển Kho Quốc Tế Mới',
-          'Có phiếu chuyển kho quốc tế mới: ${imeiList.length} sản phẩm ${CacheUtil.getProductName(productId)} cho ${transporter}',
-          'transfer_global_created',
-        );
-
         if (mounted) {
+          Navigator.pop(context);
           Navigator.pop(context);
         }
 

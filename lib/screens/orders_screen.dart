@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:collection/collection.dart';
+import 'package:intl/intl.dart';
 import 'transactions/forms/sale_form.dart' show CacheUtil, SaleForm;
 import './notification_service.dart';
 
@@ -65,6 +67,7 @@ class OrdersScreen extends StatefulWidget {
 class _OrdersScreenState extends State<OrdersScreen> with SingleTickerProviderStateMixin {
   late TabController _tabController;
   String? customer;
+  String? customerId;
   String? categoryName;
   int? categoryId;
   String? productId;
@@ -88,6 +91,10 @@ class _OrdersScreenState extends State<OrdersScreen> with SingleTickerProviderSt
   int currentPage = 0;
   bool hasMore = true;
   bool isLoadingMore = false;
+  
+  final TextEditingController priceController = TextEditingController();
+  final TextEditingController customerPriceController = TextEditingController();
+  final NumberFormat numberFormat = NumberFormat('#,###', 'vi_VN');
 
   @override
   void initState() {
@@ -99,7 +106,20 @@ class _OrdersScreenState extends State<OrdersScreen> with SingleTickerProviderSt
   @override
   void dispose() {
     _tabController.dispose();
+    priceController.dispose();
+    customerPriceController.dispose();
     super.dispose();
+  }
+
+  String _formatNumber(double value) {
+    if (value == 0) return '';
+    return numberFormat.format(value.toInt());
+  }
+
+  double _parseFormattedNumber(String text) {
+    if (text.isEmpty) return 0.0;
+    final cleaned = text.replaceAll('.', '').replaceAll(',', '');
+    return double.tryParse(cleaned) ?? 0.0;
   }
 
   Future<void> _fetchInitialData() async {
@@ -112,9 +132,10 @@ class _OrdersScreenState extends State<OrdersScreen> with SingleTickerProviderSt
     });
 
     try {
-      final customerResponse = await widget.tenantClient.from('customers').select('name, phone, address');
+      final customerResponse = await widget.tenantClient.from('customers').select('id, name, phone, address');
       final customerList = customerResponse
           .map((e) => {
+                'id': e['id']?.toString(),
                 'name': e['name'] as String?,
                 'phone': e['phone'] as String?,
                 'address': e['address'] as String?,
@@ -342,14 +363,24 @@ class _OrdersScreenState extends State<OrdersScreen> with SingleTickerProviderSt
                       'debt_usd': 0,
                       if (birthday != null) 'birthday': birthday,
                     });
+                    // Get the newly created customer id
+                    final newCustomerResponse = await widget.tenantClient
+                        .from('customers')
+                        .select('id')
+                        .eq('name', name)
+                        .single();
+                    final newCustomerId = newCustomerResponse['id']?.toString();
                     setState(() {
                       customers.add({
+                        'id': newCustomerId,
                         'name': name,
                         'phone': phone,
                         'address': address,
                       });
                       customer = name;
+                      customerId = newCustomerId;
                       selectedCustomerData = {
+                        'id': newCustomerId,
                         'name': name,
                         'phone': phone,
                         'address': address,
@@ -456,6 +487,7 @@ class _OrdersScreenState extends State<OrdersScreen> with SingleTickerProviderSt
                     if (customer == customerData['name']) {
                       customer = name;
                       selectedCustomerData = {
+                        'id': customerData['id'],
                         'name': name,
                         'phone': phone,
                         'address': address,
@@ -726,6 +758,7 @@ class _OrdersScreenState extends State<OrdersScreen> with SingleTickerProviderSt
             onPressed: () async {
               try {
                 final response = await widget.tenantClient.from('orders').insert({
+                  'customer_id': customerId,
                   'customers': customer,
                   'product_id': productId,
                   'product_name': productName,
@@ -786,6 +819,8 @@ class _OrdersScreenState extends State<OrdersScreen> with SingleTickerProviderSt
                   customerPrice = 0.0;
                   transporterPrice = 0.0;
                   selectedCustomerData = null;
+                  priceController.clear();
+                  customerPriceController.clear();
                 });
 
                 Navigator.pop(dialogContext);
@@ -1155,10 +1190,12 @@ class _OrdersScreenState extends State<OrdersScreen> with SingleTickerProviderSt
                               ..take(3);
                           },
                           onSelected: (val) {
-                            setState(() {
-                              customer = val;
-                              selectedCustomerData = customers.firstWhere((c) => c['name'] == val);
-                            });
+                          setState(() {
+                            customer = val;
+                            final customerData = customers.firstWhere((c) => c['name'] == val);
+                            customerId = customerData['id'] as String?;
+                            selectedCustomerData = customerData;
+                          });
                           },
                           fieldViewBuilder: (context, controller, focusNode, onSubmit) {
                             return TextField(
@@ -1296,12 +1333,22 @@ class _OrdersScreenState extends State<OrdersScreen> with SingleTickerProviderSt
                 ),
                 wrapField(
                   TextFormField(
+                    controller: priceController,
                     keyboardType: TextInputType.number,
                     onChanged: (val) {
+                      final numericValue = _parseFormattedNumber(val);
                       setState(() {
-                        price = double.tryParse(val) ?? 0.0;
+                        price = numericValue;
                         transporterPrice = price - customerPrice;
                       });
+                      
+                      final formatted = _formatNumber(numericValue);
+                      if (val != formatted) {
+                        priceController.value = TextEditingValue(
+                          text: formatted,
+                          selection: TextSelection.collapsed(offset: formatted.length),
+                        );
+                      }
                     },
                     decoration: const InputDecoration(
                       labelText: 'Giá tiền',
@@ -1315,12 +1362,22 @@ class _OrdersScreenState extends State<OrdersScreen> with SingleTickerProviderSt
                     Expanded(
                       child: wrapField(
                         TextFormField(
+                          controller: customerPriceController,
                           keyboardType: TextInputType.number,
                           onChanged: (val) {
+                            final numericValue = _parseFormattedNumber(val);
                             setState(() {
-                              customerPrice = double.tryParse(val) ?? 0.0;
+                              customerPrice = numericValue;
                               transporterPrice = price - customerPrice;
                             });
+                            
+                            final formatted = _formatNumber(numericValue);
+                            if (val != formatted) {
+                              customerPriceController.value = TextEditingValue(
+                                text: formatted,
+                                selection: TextSelection.collapsed(offset: formatted.length),
+                              );
+                            }
                           },
                           decoration: const InputDecoration(
                             labelText: 'Số tiền cọc',
@@ -1341,7 +1398,7 @@ class _OrdersScreenState extends State<OrdersScreen> with SingleTickerProviderSt
                               style: TextStyle(fontSize: 14, color: Colors.black54),
                             ),
                             Text(
-                              transporterPrice.toString(),
+                              _formatNumber(transporterPrice),
                               style: const TextStyle(fontSize: 14, color: Colors.black),
                             ),
                           ],

@@ -86,6 +86,7 @@ class _FixSendSummaryState extends State<FixSendSummary> {
         return {
           'ticket_id': ticketId,
           'fixer': item['fixer'],
+          'fix_unit_id': item['fixer_id'],
           'product_id': item['product_id'],
           'product_name': item['product_name'],
           'imei': item['imei'],
@@ -221,6 +222,7 @@ class _FixSendSummaryState extends State<FixSendSummary> {
         return {
           'ticket_id': ticketId,
           'fixer': item['fixer'],
+          'fix_unit_id': item['fixer_id'],
           'product_id': item['product_id'],
           'imei': item['imei'],
           'quantity': item['quantity'],
@@ -255,13 +257,6 @@ class _FixSendSummaryState extends State<FixSendSummary> {
         131,
         "Phiếu Gửi Sửa Đã Tạo",
         "Đã tạo phiếu gửi sửa với ${formatNumberLocal(widget.ticketItems.length)} mục",
-        'fix_send_created',
-      );
-
-      // Gửi thông báo đến tất cả người dùng khác
-      await NotificationService.sendNotificationToAll(
-        "Phiếu Gửi Sửa Mới",
-        "Có phiếu gửi sửa mới với ${formatNumberLocal(widget.ticketItems.length)} mục",
         'fix_send_created',
       );
 

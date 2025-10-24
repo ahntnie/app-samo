@@ -41,6 +41,7 @@ class PaymentForm extends StatefulWidget {
 class _PaymentFormState extends State<PaymentForm> {
   String partnerType = 'suppliers';
   String? partnerName;
+  String? partnerId;
   double amount = 0;
   String? currency;
   String? account;
@@ -51,6 +52,7 @@ class _PaymentFormState extends State<PaymentForm> {
   List<String> currencies = [];
   List<String> accounts = [];
   List<String> partnerSuggestions = [];
+  Map<String, String> partnerIdMap = {}; // Map name to id for suppliers
 
   final Map<String, String> partnerTypeLabels = {
     'suppliers': 'Nhà cung cấp',
@@ -137,9 +139,10 @@ class _PaymentFormState extends State<PaymentForm> {
 
   Future<void> loadPartners() async {
     try {
+      final selectColumns = (partnerType == 'suppliers' || partnerType == 'fix_units') ? 'id, name' : 'name';
       final response = await widget.tenantClient
           .from(partnerType)
-          .select('name');
+          .select(selectColumns);
       setState(() {
         partnerSuggestions =
             response
@@ -147,7 +150,21 @@ class _PaymentFormState extends State<PaymentForm> {
                 .where((e) => e != null)
                 .cast<String>()
                 .toList();
+        // Build id map for suppliers and fix units
+        if (partnerType == 'suppliers' || partnerType == 'fix_units') {
+          partnerIdMap = {};
+          for (var e in response) {
+            final name = e['name'] as String?;
+            final id = e['id']?.toString();
+            if (name != null && id != null) {
+              partnerIdMap[name] = id;
+            }
+          }
+        } else {
+          partnerIdMap = {};
+        }
         partnerName = null;
+        partnerId = null;
       });
     } catch (e) {
       setState(() {
@@ -281,13 +298,23 @@ class _PaymentFormState extends State<PaymentForm> {
     }
 
     if (partnerName != null) {
-      final partnerData =
-          await widget.tenantClient
-              .from(partnerType)
-              .select()
-              .eq('name', partnerName!)
-              .single();
-      snapshotData[partnerType] = partnerData;
+      if ((partnerType == 'suppliers' || partnerType == 'fix_units') && partnerId != null) {
+        final partnerData =
+            await widget.tenantClient
+                .from(partnerType)
+                .select()
+                .eq('id', partnerId!)
+                .single();
+        snapshotData[partnerType] = partnerData;
+      } else {
+        final partnerData =
+            await widget.tenantClient
+                .from(partnerType)
+                .select()
+                .eq('name', partnerName!)
+                .single();
+        snapshotData[partnerType] = partnerData;
+      }
     }
 
     return snapshotData;
@@ -356,8 +383,13 @@ class _PaymentFormState extends State<PaymentForm> {
       debtColumn = 'debt';
       currentDebt = double.tryParse(partnerData[debtColumn].toString()) ?? 0;
     } else {
-      final partnerData =
-          await widget.tenantClient
+      final partnerData = (partnerType == 'suppliers' || partnerType == 'fix_units') && partnerId != null
+          ? await widget.tenantClient
+              .from(partnerType)
+              .select('debt_vnd, debt_cny, debt_usd')
+              .eq('id', partnerId!)
+              .single()
+          : await widget.tenantClient
               .from(partnerType)
               .select('debt_vnd, debt_cny, debt_usd')
               .eq('name', partnerName!)
@@ -407,6 +439,7 @@ class _PaymentFormState extends State<PaymentForm> {
                               'type': 'payment',
                               'partner_type': partnerType,
                               'partner_name': partnerName,
+                              'partner_id': partnerId,
                               'amount': amount,
                               'currency': currency,
                               'account': account,
@@ -435,13 +468,6 @@ class _PaymentFormState extends State<PaymentForm> {
                         "Đã tạo phiếu chi với số tiền ${formatNumberLocal(amount)} $currency",
                         'payment_created',
                       );
-
-                      // Gửi thông báo đến tất cả người dùng khác
-                      await NotificationService.sendNotificationToAll(
-                        "Phiếu Chi Mới",
-                        "Có phiếu chi mới được tạo với số tiền ${formatNumberLocal(amount)} $currency",
-                        'payment_created',
-                      );
         
                     } catch (e) {
                       print('Error showing payment notification: $e');
@@ -449,10 +475,17 @@ class _PaymentFormState extends State<PaymentForm> {
 
                     double updatedDebt = currentDebt - amount;
 
-                    await widget.tenantClient
-                        .from(partnerType)
-                        .update({debtColumn: updatedDebt})
-                        .eq('name', partnerName!);
+                    if ((partnerType == 'suppliers' || partnerType == 'fix_units') && partnerId != null) {
+                      await widget.tenantClient
+                          .from(partnerType)
+                          .update({debtColumn: updatedDebt})
+                          .eq('id', partnerId!);
+                    } else {
+                      await widget.tenantClient
+                          .from(partnerType)
+                          .update({debtColumn: updatedDebt})
+                          .eq('name', partnerName!);
+                    }
 
                     await widget.tenantClient
                         .from('financial_accounts')
@@ -621,7 +654,12 @@ class _PaymentFormState extends State<PaymentForm> {
                               ..take(3);
                           },
                           onSelected:
-                              (val) => setState(() => partnerName = val),
+                              (val) => setState(() {
+                                partnerName = val;
+                                if (partnerType == 'suppliers' || partnerType == 'fix_units') {
+                                  partnerId = partnerIdMap[val];
+                                }
+                              }),
                           fieldViewBuilder: (
                             context,
                             controller,

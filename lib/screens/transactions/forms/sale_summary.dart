@@ -27,7 +27,8 @@ Future<T> retry<T>(Future<T> Function() fn, {String? operation}) async {
 
 class SaleSummary extends StatefulWidget {
   final SupabaseClient tenantClient;
-  final String customer;
+  final String customerId;
+  final String customerName;
   final List<Map<String, dynamic>> ticketItems;
   final String salesman;
   final String currency;
@@ -35,7 +36,8 @@ class SaleSummary extends StatefulWidget {
   const SaleSummary({
     super.key,
     required this.tenantClient,
-    required this.customer,
+    required this.customerId,
+    required this.customerName,
     required this.ticketItems,
     required this.salesman,
     required this.currency,
@@ -105,7 +107,7 @@ class _SaleSummaryState extends State<SaleSummary> {
       final transporterList = (transporterResponse as List<dynamic>).map((e) => e['name'] as String?).whereType<String>().toList();
 
       final customerResponse = await retry(
-        () => supabase.from('customers').select('debt_vnd').eq('name', widget.customer).single(),
+        () => supabase.from('customers').select('debt_vnd').eq('id', widget.customerId).single(),
         operation: 'Fetch customer debt',
       );
       final debt = double.tryParse(customerResponse['debt_vnd'].toString()) ?? 0;
@@ -154,7 +156,7 @@ class _SaleSummaryState extends State<SaleSummary> {
 
     try {
       final customerData = await retry(
-        () => supabase.from('customers').select().eq('name', widget.customer).single(),
+        () => supabase.from('customers').select().eq('id', widget.customerId).single(),
         operation: 'Fetch customer for snapshot',
       );
       snapshotData['customers'] = customerData;
@@ -187,7 +189,8 @@ class _SaleSummaryState extends State<SaleSummary> {
         final imeiList = (item['imei'] as String).split(',').where((e) => e.trim().isNotEmpty).toList();
         return {
           'ticket_id': ticketId,
-          'customer': widget.customer,
+          'customer_id': widget.customerId,
+          'customer': widget.customerName,
           'product_id': item['product_id'],
           'product_name': item['product_name'],
           'imei': item['imei'],
@@ -253,7 +256,7 @@ class _SaleSummaryState extends State<SaleSummary> {
       if (snapshot.containsKey('customers') && snapshot['customers'] != null) {
         try {
           await retry(
-            () => supabase.from('customers').update(snapshot['customers']).eq('name', widget.customer),
+            () => supabase.from('customers').update(snapshot['customers']).eq('id', widget.customerId),
             operation: 'Rollback customers',
           );
         } catch (e) {
@@ -357,7 +360,7 @@ class _SaleSummaryState extends State<SaleSummary> {
       for (var product in productsData as List<dynamic>) {
         if (product['status'] != 'Đã bán' || 
             product['saleman'] != widget.salesman ||
-            product['customer'] != widget.customer) {
+            product['customer'] != widget.customerName) {
           print('Product ${product['imei']} not properly updated: status=${product['status']}, saleman=${product['saleman']}, customer=${product['customer']}');
           return false;
         }
@@ -377,7 +380,7 @@ class _SaleSummaryState extends State<SaleSummary> {
 
       if (account == 'Công nợ') {
         final customerData = await retry(
-          () => supabase.from('customers').select('debt_vnd, debt_cny, debt_usd').eq('name', widget.customer).single(),
+          () => supabase.from('customers').select('debt_vnd, debt_cny, debt_usd').eq('id', widget.customerId).single(),
           operation: 'Verify customer debt',
         );
 
@@ -391,7 +394,7 @@ class _SaleSummaryState extends State<SaleSummary> {
         }
       } else if (account == 'Ship COD') {
         final customerData = await retry(
-          () => supabase.from('customers').select('debt_vnd').eq('name', widget.customer).single(),
+          () => supabase.from('customers').select('debt_vnd').eq('id', widget.customerId).single(),
           operation: 'Verify customer COD debt',
         );
 
@@ -609,7 +612,7 @@ class _SaleSummaryState extends State<SaleSummary> {
           () => supabase.from('products').select('imei, product_id, cost_price, warehouse_id, warehouse_name').inFilter('imei', allImeis),
           operation: 'Fetch products data',
         );
-        productsDataBeforeUpdate = response as List<Map<String, dynamic>>;
+        productsDataBeforeUpdate = List<Map<String, dynamic>>.from(response);
       }
 
       final snapshotData = await retry(
@@ -652,7 +655,8 @@ class _SaleSummaryState extends State<SaleSummary> {
         final warehouseName = productData.isNotEmpty ? productData.first['warehouse_name'] as String? ?? '' : '';
         return {
           'ticket_id': ticketId,
-          'customer': widget.customer,
+          'customer_id': widget.customerId,
+          'customer': widget.customerName,
           'product_id': item['product_id'],
           'product_name': item['product_name'],
           'warehouse_id': warehouseId,
@@ -688,8 +692,10 @@ class _SaleSummaryState extends State<SaleSummary> {
           await retry(
             () => supabase.from('sale_orders').insert({
               'ticket_id': ticketId,
+              'customer_id': item['customer_id'],
               'customer': item['customer'],
               'product_id': item['product_id'],
+              'product_name': item['product_name'],
               'warehouse_id': item['warehouse_id'],
               'imei': item['imei'],
               'quantity': item['quantity'],
@@ -734,7 +740,7 @@ class _SaleSummaryState extends State<SaleSummary> {
                 'saleman': widget.salesman,
                 'sale_price': salePriceInVND,
                 'profit': salePriceInVND - costPrice,
-                'customer': widget.customer, // Add customer name to products table
+                'customer': widget.customerName, // Add customer name to products table
                 if (account == 'Ship COD') ...{
                   'customer_price': customerPricePerImei,
                   'transporter_price': transporterPricePerImei[batchImeis.first] ?? 0,
@@ -753,7 +759,7 @@ class _SaleSummaryState extends State<SaleSummary> {
       if (account == 'Công nợ') {
         try {
           final currentCustomer = await retry(
-            () => supabase.from('customers').select('debt_vnd, debt_cny, debt_usd').eq('name', widget.customer).single(),
+            () => supabase.from('customers').select('debt_vnd, debt_cny, debt_usd').eq('id', widget.customerId).single(),
             operation: 'Fetch current customer debt',
           );
           String debtColumn;
@@ -769,7 +775,7 @@ class _SaleSummaryState extends State<SaleSummary> {
           final currentDebt = double.tryParse(currentCustomer[debtColumn].toString()) ?? 0;
           final updatedDebt = currentDebt + totalAmount;
           await retry(
-            () => supabase.from('customers').update({debtColumn: updatedDebt}).eq('name', widget.customer),
+            () => supabase.from('customers').update({debtColumn: updatedDebt}).eq('id', widget.customerId),
             operation: 'Update customer debt',
           );
         } catch (e) {
@@ -779,13 +785,13 @@ class _SaleSummaryState extends State<SaleSummary> {
       } else if (account == 'Ship COD') {
         try {
           final currentCustomer = await retry(
-            () => supabase.from('customers').select('debt_vnd').eq('name', widget.customer).single(),
+            () => supabase.from('customers').select('debt_vnd').eq('id', widget.customerId).single(),
             operation: 'Fetch current customer debt for Ship COD',
           );
           final currentCustomerDebt = double.tryParse(currentCustomer['debt_vnd'].toString()) ?? 0;
           final updatedCustomerDebt = currentCustomerDebt + depositValue;
           await retry(
-            () => supabase.from('customers').update({'debt_vnd': updatedCustomerDebt}).eq('name', widget.customer),
+            () => supabase.from('customers').update({'debt_vnd': updatedCustomerDebt}).eq('id', widget.customerId),
             operation: 'Update customer debt for Ship COD',
           );
 
@@ -839,13 +845,6 @@ class _SaleSummaryState extends State<SaleSummary> {
         'sale_created',
       );
 
-      // Gửi thông báo đến tất cả người dùng khác
-      await NotificationService.sendNotificationToAll(
-        "Phiếu Bán Hàng Mới",
-        "Có phiếu bán hàng mới: \"$firstProductName\" số lượng ${formatNumberLocal(totalImeiCount)} chiếc",
-        'sale_created',
-      );
-
       if (mounted) {
         setState(() {
           isProcessing = false;
@@ -863,6 +862,7 @@ class _SaleSummaryState extends State<SaleSummary> {
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           ),
         );
+        Navigator.pop(context);
         Navigator.pop(context);
       }
     } catch (e) {
@@ -925,8 +925,6 @@ class _SaleSummaryState extends State<SaleSummary> {
     }
 
     final totalAmount = _calculateTotalAmount();
-    final totalImeiCount = _calculateTotalImeiCount();
-    final firstProductName = _getFirstProductName();
     final depositValue = double.tryParse(deposit?.replaceAll('.', '') ?? '0') ?? 0;
     codAmount = totalAmount - depositValue;
 
@@ -990,7 +988,7 @@ class _SaleSummaryState extends State<SaleSummary> {
                                               MaterialPageRoute(
                                                 builder: (context) => SaleForm(
                                                   tenantClient: widget.tenantClient,
-                                                  initialCustomer: widget.customer,
+                                                  initialCustomer: widget.customerName,
                                                   initialProductId: item['product_id'] as String,
                                                   initialProductName: item['product_name'] as String,
                                                   initialPrice: (item['price'] as double).toString(),
@@ -1029,7 +1027,7 @@ class _SaleSummaryState extends State<SaleSummary> {
                       const SizedBox(height: 8),
                       Text('Nhân viên bán: ${widget.salesman}'),
                       const SizedBox(height: 8),
-                      Text('Khách hàng: ${widget.customer}'),
+                      Text('Khách hàng: ${widget.customerName}'),
                       const SizedBox(height: 8),
                       wrapField(
                         DropdownButtonFormField<String>(
@@ -1181,7 +1179,8 @@ class _SaleSummaryState extends State<SaleSummary> {
                             MaterialPageRoute(
                               builder: (context) => SaleForm(
                                 tenantClient: widget.tenantClient,
-                                initialCustomer: widget.customer,
+                                initialCustomerId: widget.customerId,
+                                initialCustomer: widget.customerName,
                                 initialSalesman: widget.salesman,
                                 ticketItems: widget.ticketItems,
                               ),

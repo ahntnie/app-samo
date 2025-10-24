@@ -3,15 +3,24 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:timezone/timezone.dart' as tz;
 import 'package:timezone/data/latest.dart' as tz;
+import 'dart:convert';
 
 class NotificationService {
   static final FlutterLocalNotificationsPlugin
   _flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
   static bool _isAppInForeground = true;
   static late SupabaseClient _tenantClient;
+  static String? _tenantUrl;
+  static String? _tenantAnonKey;
 
-  static Future<void> init(SupabaseClient tenantClient) async {
+  static Future<void> init(
+    SupabaseClient tenantClient, {
+    String? tenantUrl,
+    String? tenantAnonKey,
+  }) async {
     _tenantClient = tenantClient;
+    _tenantUrl = tenantUrl;
+    _tenantAnonKey = tenantAnonKey;
     tz.initializeTimeZones();
     final vietnam = tz.getLocation('Asia/Ho_Chi_Minh');
     tz.setLocalLocation(vietnam);
@@ -145,6 +154,44 @@ class NotificationService {
     print('App state updated: isForeground = $_isAppInForeground');
   }
 
+  /// Gửi thông báo đến TẤT CẢ thiết bị thông qua Supabase Edge Function
+  static Future<void> sendNotificationToAll(
+    String title,
+    String body, {
+    Map<String, dynamic>? data,
+  }) async {
+    try {
+      print('Sending notification to all devices: $title - $body');
+      
+      if (_tenantUrl == null || _tenantAnonKey == null) {
+        print('Error: Tenant credentials not set. Call NotificationService.init() first.');
+        return;
+      }
+      
+      // Gọi Edge Function từ main Supabase project (không phải tenant)
+      final mainClient = Supabase.instance.client;
+      final response = await mainClient.functions.invoke(
+        'send-fcm-notification',
+        body: {
+          'title': title,
+          'body': body,
+          'data': data ?? {},
+          'tenant_url': _tenantUrl,
+          'tenant_anon_key': _tenantAnonKey,
+        },
+      );
+
+      if (response.status == 200) {
+        final result = response.data;
+        print('Notification sent successfully: ${jsonEncode(result)}');
+      } else {
+        print('Error sending notification: ${response.status} - ${response.data}');
+      }
+    } catch (e) {
+      print('Exception sending notification to all devices: $e');
+    }
+  }
+
   static Future<void> _saveDeviceToken(String token) async {
     try {
       final existingToken =
@@ -183,7 +230,7 @@ class NotificationService {
             badge: true,
             sound: true,
           );
-
+          
       const AndroidNotificationDetails androidPlatformChannelSpecifics =
           AndroidNotificationDetails(
             'high_importance_channel',
@@ -243,8 +290,6 @@ class NotificationService {
     Function callback,
   ) async {
     await _flutterLocalNotificationsPlugin.zonedSchedule(
-      uiLocalNotificationDateInterpretation:
-          UILocalNotificationDateInterpretation.absoluteTime,
       id,
       title,
       body,
@@ -414,67 +459,6 @@ class NotificationService {
         "Hôm nay móm rồi. Không bán được hàng nên nhịn cơm",
         'no_sales_today',
       );
-    }
-  }
-
-  // Gửi thông báo đến tất cả thiết bị trong hệ thống
-  static Future<void> sendNotificationToAll(
-    String title,
-    String body,
-    String payload,
-  ) async {
-    try {
-      // Lấy tất cả FCM tokens từ database
-      final tokensResponse = await _tenantClient
-          .from('device_tokens')
-          .select('fcm_token');
-
-      if (tokensResponse.isEmpty) {
-        print('Không có device token nào để gửi thông báo');
-        return;
-      }
-
-      final tokens = tokensResponse
-          .map((token) => token['fcm_token'] as String)
-          .toList();
-
-      print('Gửi thông báo đến ${tokens.length} thiết bị');
-
-      // Gửi thông báo đến từng token
-      for (final token in tokens) {
-        try {
-          await _sendFCMNotification(token, title, body, payload);
-        } catch (e) {
-          print('Lỗi khi gửi thông báo đến token $token: $e');
-        }
-      }
-    } catch (e) {
-      print('Lỗi khi lấy danh sách device tokens: $e');
-    }
-  }
-
-  // Gửi FCM notification qua Supabase function
-  static Future<void> _sendFCMNotification(
-    String token,
-    String title,
-    String body,
-    String payload,
-  ) async {
-    try {
-      await _tenantClient.functions.invoke(
-        'send-fcm-notification',
-        body: {
-          'token': token,
-          'title': title,
-          'body': body,
-          'data': {
-            'payload': payload,
-            'timestamp': DateTime.now().toIso8601String(),
-          },
-        },
-      );
-    } catch (e) {
-      print('Lỗi khi gọi Supabase function send-fcm-notification: $e');
     }
   }
 }

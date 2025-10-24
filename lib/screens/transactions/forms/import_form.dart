@@ -75,11 +75,10 @@ class _ImportFormState extends State<ImportForm> {
   int? categoryId;
   String? categoryName;
   String? supplier;
+  String? supplierId;
   String? productId;
   String? productName;
   String? imei = '';
-  int quantity = 1;
-  String? imeiPrefix;
   String? price;
   String? currency;
   String? account;
@@ -92,7 +91,8 @@ class _ImportFormState extends State<ImportForm> {
   final Set<String> confirmedImeis = {};
 
   List<Map<String, dynamic>> categories = [];
-  List<String> suppliers = [];
+  List<Map<String, dynamic>> suppliers = [];
+  Map<String, String> supplierIdMap = {};
   List<Map<String, dynamic>> products = [];
   List<String> currencies = [];
   List<Map<String, dynamic>> accounts = [];
@@ -139,14 +139,21 @@ class _ImportFormState extends State<ImportForm> {
         ..sort((a, b) => (a['name'] as String).toLowerCase().compareTo((b['name'] as String).toLowerCase()));
 
       final supplierResponse = await retry(
-            () => supabase.from('suppliers').select('name'),
+            () => supabase.from('suppliers').select('id, name'),
         operation: 'Fetch suppliers',
       );
       final supplierList = supplierResponse
-          .map((e) => e['name'] as String?)
-          .whereType<String>()
+          .map((e) {
+        final id = e['id']?.toString();
+        final name = e['name'] as String?;
+        if (id != null && name != null) {
+          return {'id': id, 'name': name};
+        }
+        return null;
+      })
+          .whereType<Map<String, dynamic>>()
           .toList()
-        ..sort();
+        ..sort((a, b) => (a['name'] as String).compareTo(b['name'] as String));
 
       final productResponse = await retry(
             () => supabase.from('products_name').select('id, products'),
@@ -213,6 +220,12 @@ class _ImportFormState extends State<ImportForm> {
         setState(() {
           categories = categoryList;
           suppliers = supplierList;
+          supplierIdMap = {};
+          for (var s in supplierList) {
+            final name = s['name'] as String;
+            final id = s['id'] as String;
+            supplierIdMap[name] = id;
+          }
           products = productList;
           warehouses = warehouseList;
           currencies = uniqueCurrencies;
@@ -488,14 +501,92 @@ class _ImportFormState extends State<ImportForm> {
     }
   }
 
+  Future<void> _showAutoImeiDialog() async {
+    if (productId == null || warehouseId == null) {
+      await showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Thông báo'),
+          content: const Text('Vui lòng chọn sản phẩm và kho hàng trước!'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Đóng'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    int quantity = 1;
+    String? imeiPrefix;
+
+    await showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Tự động sinh IMEI'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Số lượng'),
+              onChanged: (val) => quantity = int.tryParse(val) ?? 1,
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              decoration: const InputDecoration(labelText: 'Đầu mã bắt đầu'),
+              onChanged: (val) => imeiPrefix = val.isNotEmpty ? val : null,
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Hủy'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _generateAutoImeis(quantity, imeiPrefix);
+            },
+            child: const Text('Xác nhận'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _generateAutoImeis(int quantity, String? prefix) {
+    if (quantity <= 0) return;
+    
+    final List<String> newImeis = [];
+    final effectivePrefix = prefix?.isNotEmpty == true ? prefix! : (isAccessory ? 'PK' : 'AUTO');
+    
+    for (int i = 0; i < quantity; i++) {
+      final randomNumbers = math.Random().nextInt(10000000).toString().padLeft(7, '0');
+      newImeis.add('$effectivePrefix$randomNumbers');
+    }
+    
+    setState(() {
+      if (imei != null && imei!.isNotEmpty) {
+        imei = '$imei\n${newImeis.join('\n')}';
+      } else {
+        imei = newImeis.join('\n');
+      }
+      imeiController.text = imei ?? '';
+    });
+  }
+
   Future<Map<String, dynamic>> _createSnapshot(String ticketId, List<String> imeiList) async {
     final supabase = widget.tenantClient;
     final snapshotData = <String, dynamic>{};
 
     try {
-      if (supplier != null) {
+      if (supplierId != null) {
         final supplierData = await retry(
-              () => supabase.from('suppliers').select().eq('name', supplier!).single(),
+              () => supabase.from('suppliers').select().eq('id', supplierId!).single(),
           operation: 'Fetch supplier data',
         );
         snapshotData['suppliers'] = supplierData;
@@ -525,7 +616,7 @@ class _ImportFormState extends State<ImportForm> {
       snapshotData['import_orders'] = [
         {
           'id': ticketId,
-          'supplier': supplier,
+          'supplier_id': supplierId,
           'warehouse_id': warehouseId,
           'warehouse_name': CacheUtil.getWarehouseName(warehouseId),
           'product_id': productId,
@@ -653,20 +744,25 @@ class _ImportFormState extends State<ImportForm> {
                 return;
               }
               try {
-                await retry(
+                final response = await retry(
                       () => widget.tenantClient.from('suppliers').insert({
                     'name': name,
                     'debt_vnd': 0,
                     'debt_cny': 0,
                     'debt_usd': 0,
-                  }),
+                  }).select('id, name').single(),
                   operation: 'Add supplier',
                 );
-                setState(() {
-                  suppliers.add(name);
-                  suppliers.sort();
-                  supplier = name;
-                });
+                final newSupplierId = response['id']?.toString();
+                if (newSupplierId != null) {
+                  setState(() {
+                    suppliers.add({'id': newSupplierId, 'name': name});
+                    suppliers.sort((a, b) => (a['name'] as String).compareTo(b['name'] as String));
+                    supplier = name;
+                    supplierId = newSupplierId;
+                    supplierIdMap[name] = newSupplierId;
+                  });
+                }
                 Navigator.pop(context);
               } catch (e) {
                 await showDialog(
@@ -893,7 +989,7 @@ class _ImportFormState extends State<ImportForm> {
         priceController.text.isEmpty ||
         account == null ||
         currency == null ||
-        (!isAccessory && (imei == null || imei!.isEmpty) && (quantity <= 0 || imeiPrefix == null || imeiPrefix!.isEmpty))) {
+        (imei == null || imei!.isEmpty)) {
       if (mounted) {
         await showDialog(
           context: scaffoldContext,
@@ -933,27 +1029,8 @@ class _ImportFormState extends State<ImportForm> {
     final amount = double.tryParse(priceController.text.replaceAll('.', '')) ?? 0;
 
     List<String> imeiList = [];
-    if (isAccessory) {
-      if (quantity <= 1) {
-        final prefix = imeiPrefix?.isNotEmpty == true ? imeiPrefix! : 'PK';
-        imeiList.add('$prefix-${now.millisecondsSinceEpoch}${math.Random().nextInt(1000)}');
-      } else {
-        final prefix = imeiPrefix?.isNotEmpty == true ? imeiPrefix! : 'PK';
-        for (int i = 0; i < quantity; i++) {
-          final randomNumbers = math.Random().nextInt(10000000).toString().padLeft(7, '0');
-          imeiList.add('$prefix$randomNumbers');
-        }
-      }
-    } else {
-      if (imei != null && imei!.isNotEmpty) {
-        imeiList = imei!.split('\n').where((e) => e.trim().isNotEmpty).toList();
-      } else if (quantity > 0 && imeiPrefix != null && imeiPrefix!.isNotEmpty) {
-        final prefix = imeiPrefix!;
-        for (int i = 0; i < quantity; i++) {
-          final randomNumbers = math.Random().nextInt(10000000).toString().padLeft(7, '0');
-          imeiList.add('$prefix$randomNumbers');
-        }
-      }
+    if (imei != null && imei!.isNotEmpty) {
+      imeiList = imei!.split('\n').where((e) => e.trim().isNotEmpty).toList();
     }
 
     if (imeiList.isEmpty) {
@@ -1131,7 +1208,7 @@ class _ImportFormState extends State<ImportForm> {
                       'product_name': CacheUtil.getProductName(productId),
                       'warehouse_id': warehouseId,
                       'warehouse_name': CacheUtil.getWarehouseName(warehouseId),
-                      'supplier': supplier,
+                      'supplier_id': supplierId,
                       'imei': imeiList.join(','),
                       'quantity': imeiList.length,
                       'price': amount,
@@ -1186,7 +1263,7 @@ class _ImportFormState extends State<ImportForm> {
                           'category_id': categoryId,
                           'import_price': amount,
                           'import_currency': currency,
-                          'supplier': supplier,
+                          'supplier_id': supplierId,
                           'import_date': now.toIso8601String(),
                           'warehouse_id': warehouseId,
                           'warehouse_name': CacheUtil.getWarehouseName(warehouseId),
@@ -1206,7 +1283,7 @@ class _ImportFormState extends State<ImportForm> {
                           'imei': generatedIMEI,
                           'import_price': amount,
                           'import_currency': currency,
-                          'supplier': supplier,
+                          'supplier_id': supplierId,
                           'import_date': now.toIso8601String(),
                           'warehouse_id': warehouseId,
                           'warehouse_name': CacheUtil.getWarehouseName(warehouseId),
@@ -1223,7 +1300,7 @@ class _ImportFormState extends State<ImportForm> {
                           () => supabase
                           .from('suppliers')
                           .select('debt_vnd, debt_cny, debt_usd')
-                          .eq('name', supplier!)
+                          .eq('id', supplierId!)
                           .single(),
                       operation: 'Fetch supplier debt',
                     );
@@ -1246,7 +1323,7 @@ class _ImportFormState extends State<ImportForm> {
                           () => supabase
                           .from('suppliers')
                           .update({debtColumn: updatedDebt})
-                          .eq('name', supplier!),
+                          .eq('id', supplierId!),
                       operation: 'Update supplier debt',
                     );
                   } else {
@@ -1274,40 +1351,10 @@ class _ImportFormState extends State<ImportForm> {
                     'import_created',
                   );
 
-                  // Gửi thông báo đến tất cả người dùng khác
-                  await NotificationService.sendNotificationToAll(
-                    'Phiếu Nhập Hàng Mới',
-                    'Có phiếu nhập hàng mới: "${CacheUtil.getProductName(currentProductId)}" số lượng ${formatNumberLocal(currentImeiListLength)} chiếc',
-                    'import_created',
-                  );
-
                   if (mounted) {
                     setState(() {
-                      categoryId = null;
-                      categoryName = null;
-                      supplier = null;
-                      productId = null;
-                      productName = null;
-                      imei = '';
-                      imeiController.text = '';
-                      quantity = 1;
-                      imeiPrefix = null;
-                      price = null;
-                      priceController.text = '';
-                      currency = null;
-                      account = null;
-                      note = null;
-                      warehouseId = null;
-                      warehouseName = null;
-                      isAccessory = false;
-                      accountNames = [];
-                      imeiError = null;
                       isProcessing = false;
-                      _updateAccountNames(null);
                     });
-
-                    await _fetchInitialData();
-
                     ScaffoldMessenger.of(scaffoldContext).showSnackBar(
                       SnackBar(
                         content: Text(
@@ -1321,6 +1368,8 @@ class _ImportFormState extends State<ImportForm> {
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                       ),
                     );
+                    Navigator.pop(context);
+                    Navigator.pop(context);
                   }
                 } catch (e) {
                   setState(() {
@@ -1442,22 +1491,26 @@ class _ImportFormState extends State<ImportForm> {
                     ),
                   ],
                 ),
-                Row(
+                  Row(
                   children: [
                     Expanded(
                       child: wrapField(
-                        Autocomplete<String>(
+                        Autocomplete<Map<String, dynamic>>(
                           optionsBuilder: (textEditingValue) {
                             final query = textEditingValue.text.toLowerCase();
                             final filtered = suppliers
-                                .where((e) => e.toLowerCase().contains(query))
+                                .where((e) => (e['name'] as String).toLowerCase().contains(query))
                                 .toList()
-                              ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-                            return filtered.isNotEmpty ? filtered.take(10).toList() : ['Không tìm thấy nhà cung cấp'];
+                              ..sort((a, b) => (a['name'] as String).toLowerCase().compareTo((b['name'] as String).toLowerCase()));
+                            return filtered.isNotEmpty ? filtered.take(10).toList() : [{'id': '', 'name': 'Không tìm thấy nhà cung cấp'}];
                           },
+                          displayStringForOption: (option) => option['name'] as String,
                           onSelected: (val) {
-                            if (val != 'Không tìm thấy nhà cung cấp') {
-                              setState(() => supplier = val);
+                            if (val['id'].isNotEmpty) {
+                              setState(() {
+                                supplier = val['name'] as String;
+                                supplierId = val['id'] as String;
+                              });
                             }
                           },
                           fieldViewBuilder: (context, controller, focusNode, onSubmit) {
@@ -1465,7 +1518,10 @@ class _ImportFormState extends State<ImportForm> {
                             return TextField(
                               controller: controller,
                               focusNode: focusNode,
-                              onChanged: (val) => setState(() => supplier = val.isNotEmpty ? val : null),
+                              onChanged: (val) => setState(() {
+                                supplier = val.isNotEmpty ? val : null;
+                                if (val.isEmpty) supplierId = null;
+                              }),
                               decoration: const InputDecoration(
                                 labelText: 'Nhà cung cấp',
                                 border: InputBorder.none,
@@ -1576,120 +1632,106 @@ class _ImportFormState extends State<ImportForm> {
                     ),
                   ],
                 ),
-                if (!isAccessory)
-                  wrapField(
-                    Column(
-                      children: [
-                        // Phần nhập IMEI
-                        Expanded(
-                          child: TextFormField(
-                            controller: imeiController,
-                            maxLines: null,
-                            onChanged: (val) {
-                              setState(() {
-                                imei = val;
-                                imeiError = _checkDuplicateImeis(val);
-                              });
+            if (!isAccessory)
+              wrapField(
+                Column(
+                  children: [
+                    // Phần nhập IMEI
+                    Expanded(
+                      child: TextFormField(
+                        controller: imeiController,
+                        maxLines: null,
+                        onChanged: (val) {
+                          setState(() {
+                            imei = val;
+                            imeiError = _checkDuplicateImeis(val);
+                          });
 
-                              if (imeiError == null) {
-                                _checkProductStatus(val).then((error) {
-                                  if (mounted) {
-                                    setState(() => imeiError = error);
-                                  }
-                                });
+                          if (imeiError == null) {
+                            _checkProductStatus(val).then((error) {
+                              if (mounted) {
+                                setState(() => imeiError = error);
                               }
-                            },
-                            decoration: InputDecoration(
-                              labelText: 'Nhập imei hoặc quét QR (mỗi dòng 1)',
-                              border: InputBorder.none,
-                              isDense: true,
-                              errorText: imeiError,
+                            });
+                          }
+                        },
+                        decoration: InputDecoration(
+                          labelText: 'Nhập imei hoặc quét QR (mỗi dòng 1)',
+                          border: InputBorder.none,
+                          isDense: true,
+                          errorText: imeiError,
+                        ),
+                      ),
+                    ),
+                    // 3 nút quét
+                    Row(
+                      children: [
+                        // Nút quét QR (màu vàng)
+                        Expanded(
+                          child: Container(
+                            height: 24,
+                            margin: const EdgeInsets.only(right: 2),
+                            child: ElevatedButton.icon(
+                              onPressed: _scanQRCode,
+                              icon: const Icon(Icons.qr_code_scanner, size: 16),
+                              label: const Text('QR', style: TextStyle(fontSize: 12)),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.amber,
+                                foregroundColor: Colors.black,
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                              ),
                             ),
                           ),
                         ),
-                        // 2 nút quét
-                        Row(
-                          children: [
-                            // Nút quét QR (màu vàng)
-                            Expanded(
-                              child: Container(
-                                height: 24, // Chiều cao bằng 1/2 của phần còn lại
-                                margin: const EdgeInsets.only(right: 4),
-                                child: ElevatedButton.icon(
-                                  onPressed: _scanQRCode,
-                                  icon: const Icon(Icons.qr_code_scanner, size: 16),
-                                  label: const Text('QR', style: TextStyle(fontSize: 12)),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.amber,
-                                    foregroundColor: Colors.black,
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(4),
-                                    ),
-                                  ),
+                        // Nút quét Text (màu xanh lá cây)
+                        Expanded(
+                          child: Container(
+                            height: 24,
+                            margin: const EdgeInsets.symmetric(horizontal: 2),
+                            child: ElevatedButton.icon(
+                              onPressed: _scanText,
+                              icon: const Icon(Icons.text_fields, size: 16),
+                              label: const Text('IMEI', style: TextStyle(fontSize: 12)),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.green,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(4),
                                 ),
                               ),
                             ),
-                            // Nút quét Text (màu xanh lá cây)
-                            Expanded(
-                              child: Container(
-                                height: 24, // Chiều cao bằng 1/2 của phần còn lại
-                                margin: const EdgeInsets.only(left: 4),
-                                child: ElevatedButton.icon(
-                                  onPressed: _scanText,
-                                  icon: const Icon(Icons.text_fields, size: 16),
-                                  label: const Text('IMEI', style: TextStyle(fontSize: 12)),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.green,
-                                    foregroundColor: Colors.white,
-                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(4),
-                                    ),
-                                  ),
+                          ),
+                        ),
+                        // Nút Auto IMEI (màu xanh dương)
+                        Expanded(
+                          child: Container(
+                            height: 24,
+                            margin: const EdgeInsets.only(left: 2),
+                            child: ElevatedButton.icon(
+                              onPressed: _showAutoImeiDialog,
+                              icon: const Icon(Icons.auto_awesome, size: 16),
+                              label: const Text('Auto', style: TextStyle(fontSize: 12)),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.blue,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(4),
                                 ),
                               ),
                             ),
-                          ],
+                          ),
                         ),
                       ],
                     ),
-                    isImeiField: true,
-                  ),
-                Row(
-                  children: [
-                    Expanded(
-                      child: wrapField(
-                        TextFormField(
-                          keyboardType: TextInputType.number,
-                          onChanged: (val) => setState(() {
-                            quantity = int.tryParse(val) ?? 1;
-                          }),
-                          decoration: const InputDecoration(
-                            labelText: 'Số lượng',
-                            border: InputBorder.none,
-                            isDense: true,
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: wrapField(
-                        TextFormField(
-                          onChanged: (val) => setState(() {
-                            imeiPrefix = val.isNotEmpty ? val : null;
-                          }),
-                          decoration: const InputDecoration(
-                            labelText: 'Đầu mã bắt đầu',
-                            border: InputBorder.none,
-                            isDense: true,
-                          ),
-                        ),
-                      ),
-                    ),
                   ],
                 ),
+                isImeiField: true,
+              ),
                 wrapField(
                   TextFormField(
                     controller: priceController,

@@ -481,26 +481,33 @@ class _SupplierDetailsDialogState extends State<SupplierDetailsDialog> {
     try {
       final supplierName = widget.supplier['name']?.toString().trim() ?? '';
       developer.log('Fetching transactions for supplier: "$supplierName"');
-      final start = currentPage * pageSize;
-      final end = start + pageSize - 1;
 
+      final supplierId = widget.supplier['id']?.toString();
+      if (supplierId == null) {
+        setState(() {
+          transactionError = 'Không tìm thấy ID nhà cung cấp';
+          isLoadingMore = false;
+        });
+        return;
+      }
+      
       final importOrdersQuery = widget.tenantClient
           .from('import_orders')
           .select('id, product_id, imei, quantity, price, currency, created_at, account, note, warehouse_id')
-          .eq('supplier', supplierName)
+          .eq('supplier_id', supplierId)
           .eq('iscancelled', false);
 
       final returnOrdersQuery = widget.tenantClient
           .from('return_orders')
           .select('id, product_id, imei, quantity, price, currency, created_at, account, note, warehouse_id')
-          .eq('supplier', supplierName)
+          .eq('supplier_id', supplierId)
           .eq('iscancelled', false);
 
       final financialOrdersQuery = widget.tenantClient
           .from('financial_orders')
           .select('id, amount, currency, created_at, account, note')
           .eq('partner_type', 'suppliers')
-          .eq('partner_name', supplierName)
+          .eq('partner_id', supplierId)
           .eq('iscancelled', false);
 
       // Add date filters if dates are selected
@@ -613,25 +620,31 @@ class _SupplierDetailsDialogState extends State<SupplierDetailsDialog> {
     try {
       List<Map<String, dynamic>> exportTransactions = filteredTransactions;
       if (hasMoreData && startDate == null && endDate == null) {
-        final supplierName = widget.supplier['name']?.toString().trim() ?? '';
+        final supplierId = widget.supplier['id']?.toString();
+        if (supplierId == null) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Không tìm thấy ID nhà cung cấp')),
+          );
+          return;
+        }
 
         final importOrdersFuture = widget.tenantClient
             .from('import_orders')
             .select('id, product_id, imei, quantity, price, currency, created_at, account, note, warehouse_id')
-            .eq('supplier', supplierName)
+            .eq('supplier_id', supplierId)
             .eq('iscancelled', false);
 
         final returnOrdersFuture = widget.tenantClient
             .from('return_orders')
             .select('id, product_id, imei, quantity, price, currency, created_at, account, note, warehouse_id')
-            .eq('supplier', supplierName)
+            .eq('supplier_id', supplierId)
             .eq('iscancelled', false);
 
         final financialOrdersFuture = widget.tenantClient
             .from('financial_orders')
             .select('id, amount, currency, created_at, account, note')
             .eq('partner_type', 'suppliers')
-            .eq('partner_name', supplierName)
+            .eq('partner_id', supplierId)
             .eq('iscancelled', false);
 
         final results = await Future.wait([
@@ -759,6 +772,13 @@ class _SupplierDetailsDialogState extends State<SupplierDetailsDialog> {
           sheet.cell(CellIndex.indexByString("${columnLetter}$currentRow")).value = row[j];
         }
         currentRow++;
+      }
+
+      if (excel.sheets.containsKey('Sheet1')) {
+        excel.delete('Sheet1');
+        print('Sheet1 đã được xóa trước khi xuất file.');
+      } else {
+        print('Không tìm thấy Sheet1 sau khi tạo các sheet.');
       }
 
       Directory downloadsDir;

@@ -90,6 +90,7 @@ class _ReimportFormState extends State<ReimportForm> {
   List<String> accountNames = [];
   List<Map<String, dynamic>> warehouses = [];
   List<String> customers = [];
+  Map<String, String> customerIdMap = {}; // Map customer name to id
   List<String> usedImeis = [];
   bool isLoading = true;
   String? errorMessage;
@@ -190,7 +191,7 @@ class _ReimportFormState extends State<ReimportForm> {
 
       // Fetch customers
       final customerResponse = await retry(
-        () => supabase.from('customers').select('name'),
+        () => supabase.from('customers').select('id, name'),
         operation: 'Fetch customers',
       );
       final customerList = customerResponse
@@ -198,6 +199,15 @@ class _ReimportFormState extends State<ReimportForm> {
           .whereType<String>()
           .toList()
         ..sort();
+      // Build customer id map
+      final customerIdMapTemp = <String, String>{};
+      for (var e in customerResponse) {
+        final name = e['name'] as String?;
+        final id = e['id']?.toString();
+        if (name != null && id != null) {
+          customerIdMapTemp[name] = id;
+        }
+      }
 
       if (mounted) {
         setState(() {
@@ -207,6 +217,7 @@ class _ReimportFormState extends State<ReimportForm> {
           accounts = accountList;
           products = productList;
           customers = customerList;
+          customerIdMap = customerIdMapTemp;
           currency = uniqueCurrencies.contains('VND') ? 'VND' : uniqueCurrencies.isNotEmpty ? uniqueCurrencies.first : null;
           _updateAccountNames(currency);
           isLoading = false;
@@ -593,11 +604,17 @@ class _ReimportFormState extends State<ReimportForm> {
       final supabase = widget.tenantClient;
       var query = supabase
           .from('sale_orders')
-          .select('imei, customer, transporter, customer_price, transporter_price, price, currency, account, quantity')
+          .select('imei, customer, customer_id, transporter, customer_price, transporter_price, price, currency, account, quantity')
           .eq('product_id', productId!);
 
       if (selectedTarget == 'Khách Hàng') {
-        query = query.eq('customer', cust!).neq('account', 'Ship COD');
+        final customerId = customerIdMap[cust];
+        if (customerId != null) {
+          query = query.eq('customer_id', customerId).neq('account', 'Ship COD');
+        } else {
+          // Fallback to customer name if id not found
+          query = query.eq('customer', cust!).neq('account', 'Ship COD');
+        }
       } else {
         query = query.eq('account', 'Ship COD');
       }
@@ -968,20 +985,24 @@ class _ReimportFormState extends State<ReimportForm> {
                   throw Exception('Loại tiền tệ không được hỗ trợ: $saleCurrency cho IMEI ${itemsByCurrency.first['imei']}');
                 }
 
+                final customerId = customerIdMap[customer];
+                if (customerId == null) {
+                  throw Exception('Không tìm thấy ID của khách hàng "$customer"!');
+                }
                 final currentCustomer = await retry(
-                  () => supabase.from('customers').select('debt_vnd, debt_cny, debt_usd').eq('name', customer).maybeSingle(),
+                  () => supabase.from('customers').select('debt_vnd, debt_cny, debt_usd').eq('id', customerId).maybeSingle(),
                   operation: 'Fetch customer debt',
                 );
 
                 if (currentCustomer == null) {
-                  throw Exception('Khách hàng "$customer"" không tồn tại trong hệ thống!');
+                  throw Exception('Khách hàng "$customer" không tồn tại trong hệ thống!');
                 }
 
                 final currentDebt = (currentCustomer[debtColumn] as num?)?.toDouble() ?? 0.0;
                 final updatedDebt = currentDebt - customerAmount;
 
                 await retry(
-                  () => supabase.from('customers').update({debtColumn: updatedDebt}).eq('name', customer),
+                  () => supabase.from('customers').update({debtColumn: updatedDebt}).eq('id', customerId),
                   operation: 'Update customer debt for $debtColumn',
                 );
               }
@@ -1046,8 +1067,12 @@ class _ReimportFormState extends State<ReimportForm> {
             final depositAmount = entry.value;
 
             if (customer != 'Không xác định') {
+              final customerId = customerIdMap[customer];
+              if (customerId == null) {
+                throw Exception('Không tìm thấy ID của khách hàng "$customer"!');
+              }
               final currentCustomer = await retry(
-                () => supabase.from('customers').select('debt_vnd').eq('name', customer).maybeSingle(),
+                () => supabase.from('customers').select('debt_vnd').eq('id', customerId).maybeSingle(),
                 operation: 'Fetch customer debt for COD',
               );
               if (currentCustomer == null) {
@@ -1059,7 +1084,7 @@ class _ReimportFormState extends State<ReimportForm> {
               print('Updating customer $customer debt from $currentCustomerDebt to $updatedCustomerDebt (deposit: $depositAmount)');
 
               await retry(
-                () => supabase.from('customers').update({'debt_vnd': updatedCustomerDebt}).eq('name', customer),
+                () => supabase.from('customers').update({'debt_vnd': updatedCustomerDebt}).eq('id', customerId),
                 operation: 'Update customer debt for COD',
               );
             }
@@ -1103,13 +1128,6 @@ class _ReimportFormState extends State<ReimportForm> {
           136,
           'Phiếu Nhập Lại Hàng Đã Tạo',
           'Đã tạo phiếu nhập lại hàng cho ${customerGroups.keys.join(', ')}',
-          'reimport_created',
-        );
-
-        // Gửi thông báo đến tất cả người dùng khác
-        await NotificationService.sendNotificationToAll(
-          'Phiếu Nhập Lại Hàng Mới',
-          'Có phiếu nhập lại hàng mới cho ${customerGroups.keys.join(', ')}',
           'reimport_created',
         );
 
@@ -1186,13 +1204,16 @@ class _ReimportFormState extends State<ReimportForm> {
       final customerNames = items.map((item) => item['customer'] as String).toSet();
       for (var customer in customerNames) {
         if (customer != 'Không xác định') {
-          final customerData = await retry(
-            () => supabase.from('customers').select().eq('name', customer).maybeSingle(),
-            operation: 'Fetch customer data',
-          );
-          if (customerData != null) {
-            snapshotData['customers'] = snapshotData['customers'] ?? [];
-            snapshotData['customers'].add(customerData);
+          final customerId = customerIdMap[customer];
+          if (customerId != null) {
+            final customerData = await retry(
+              () => supabase.from('customers').select().eq('id', customerId).maybeSingle(),
+              operation: 'Fetch customer data',
+            );
+            if (customerData != null) {
+              snapshotData['customers'] = snapshotData['customers'] ?? [];
+              snapshotData['customers'].add(customerData);
+            }
           }
         }
       }

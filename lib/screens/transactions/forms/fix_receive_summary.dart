@@ -140,15 +140,17 @@ class _FixReceiveSummaryState extends State<FixReceiveSummary> {
       }
 
       if (account == 'Công nợ') {
-        final fixerNames = ticketItems.map((item) => item['fixer'] as String).toSet();
-        final fixerData = await retry(
-          () => supabase
-              .from('fix_units')
-              .select()
-              .inFilter('name', fixerNames.toList()),
-          operation: 'Fetch fixer data',
-        );
-        snapshotData['fix_units'] = fixerData;
+        final fixerIds = ticketItems.map((item) => item['fixer_id']?.toString()).where((id) => id != null).toSet();
+        if (fixerIds.isNotEmpty) {
+          final fixerData = await retry(
+            () => supabase
+                .from('fix_units')
+                .select()
+                .inFilter('id', fixerIds.toList()),
+            operation: 'Fetch fixer data',
+          );
+          snapshotData['fix_units'] = fixerData;
+        }
       }
 
       if (imeiList.isNotEmpty) {
@@ -168,6 +170,7 @@ class _FixReceiveSummaryState extends State<FixReceiveSummary> {
         return {
           'ticket_id': ticketId,
           'fixer': item['fixer'],
+          'fix_unit_id': item['fixer_id'],
           'product_id': item['product_id'],
           'product_name': item['product_name'],
           'warehouse_id': item['warehouse_id'],
@@ -526,6 +529,7 @@ class _FixReceiveSummaryState extends State<FixReceiveSummary> {
         return {
           'ticket_id': ticketId,
           'fixer': item['fixer'],
+          'fix_unit_id': item['fixer_id'],
           'product_id': item['product_id'],
           'warehouse_id': item['warehouse_id'],
           'imei': item['imei'],
@@ -602,13 +606,30 @@ class _FixReceiveSummaryState extends State<FixReceiveSummary> {
           final currentDebt = currentDebtResponse[debtColumn] as num? ?? 0;
           final itemAmount = (item['price'] as num) * (item['quantity'] as int);
           final updatedDebt = currentDebt + itemAmount;
-          await retry(
-            () => supabase
-                .from('fix_units')
-                .update({debtColumn: updatedDebt})
-                .eq('name', fixer),
-            operation: 'Update fixer debt for $fixer',
-          );
+          // Get fixer_id for this fixer name
+          final fixerIdForDebt = ticketItems.firstWhere(
+            (item) => item['fixer'] == fixer,
+            orElse: () => {},
+          )['fixer_id']?.toString();
+          
+          if (fixerIdForDebt != null) {
+            await retry(
+              () => supabase
+                  .from('fix_units')
+                  .update({debtColumn: updatedDebt})
+                  .eq('id', fixerIdForDebt),
+              operation: 'Update fixer debt for $fixer',
+            );
+          } else {
+            // Fallback to name for backward compatibility
+            await retry(
+              () => supabase
+                  .from('fix_units')
+                  .update({debtColumn: updatedDebt})
+                  .eq('name', fixer),
+              operation: 'Update fixer debt for $fixer (fallback)',
+            );
+          }
         }
       } else {
         final selectedAccount = accounts.firstWhere((acc) => acc['name'] == account);
@@ -636,13 +657,6 @@ class _FixReceiveSummaryState extends State<FixReceiveSummary> {
         130,
         'Phiếu Nhận Hàng Đã Tạo',
         'Đã tạo phiếu nhận hàng sửa về kho',
-        'fix_receive_created',
-      );
-
-      // Gửi thông báo đến tất cả người dùng khác
-      await NotificationService.sendNotificationToAll(
-        'Phiếu Nhận Hàng Sửa Mới',
-        'Có phiếu nhận hàng sửa về kho mới',
         'fix_receive_created',
       );
 

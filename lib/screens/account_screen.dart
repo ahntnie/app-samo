@@ -60,6 +60,7 @@ class _AccountScreenState extends State<AccountScreen> {
     {'value': 'access_orders_screen', 'display': 'Truy cập màn hình khách đặt hàng'},
     {'value': 'access_history_screen', 'display': 'Truy cập màn hình lịch sử phiếu'},
     {'value': 'view_import_price', 'display': 'Xem giá nhập'},
+    {'value': 'view_cost_price', 'display': 'Xem giá vốn'},
     {'value': 'view_supplier', 'display': 'Xem nhà cung cấp'},
     {'value': 'view_sale_price', 'display': 'Xem giá bán'},
     {'value': 'view_customer', 'display': 'Xem khách hàng'},
