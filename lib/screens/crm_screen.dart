@@ -459,87 +459,6 @@ class _CRMScreenState extends State<CRMScreen> {
     }
   }
 
-  Future<void> _sendZalo(List<String> phones, String message) async {
-    if (phones.isEmpty) {
-      await showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Lỗi'),
-          content: const Text('Không tìm thấy số điện thoại để gửi qua Zalo!'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Đóng'),
-            ),
-          ],
-        ),
-      );
-      return;
-    }
-
-    for (var phone in phones) {
-      final zaloUri = Uri.parse('https://zalo.me/$phone?text=${Uri.encodeComponent(message)}');
-      if (await canLaunchUrl(zaloUri)) {
-        await launchUrl(zaloUri);
-      } else {
-        await showDialog(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Lỗi'),
-            content: const Text('Không thể mở ứng dụng Zalo!'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Đóng'),
-              ),
-            ],
-          ),
-        );
-        return;
-      }
-    }
-  }
-
-  Future<void> _sendTelegram(List<String> phones, String message) async {
-    if (phones.isEmpty) {
-      await showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Lỗi'),
-          content: const Text('Không tìm thấy số điện thoại để gửi qua Telegram!'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Đóng'),
-            ),
-          ],
-        ),
-      );
-      return;
-    }
-
-    for (var phone in phones) {
-      final telegramUri = Uri.parse('https://t.me/$phone?text=${Uri.encodeComponent(message)}');
-      if (await canLaunchUrl(telegramUri)) {
-        await launchUrl(telegramUri);
-      } else {
-        await showDialog(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Lỗi'),
-            content: const Text('Không thể mở ứng dụng Telegram!'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Đóng'),
-              ),
-            ],
-          ),
-        );
-        return;
-      }
-    }
-  }
 
   void addCustomerDialog() {
     String day = '';
@@ -777,88 +696,6 @@ class _CRMScreenState extends State<CRMScreen> {
                 decoration: const InputDecoration(labelText: 'Nội dung tin nhắn'),
                 maxLines: 3,
               ),
-              const SizedBox(height: 16),
-              const Text('Chọn phương thức gửi:'),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  ElevatedButton(
-                    onPressed: () async {
-                      if (messageController.text.isEmpty) {
-                        await showDialog(
-                          context: context,
-                          builder: (context) => AlertDialog(
-                            title: const Text('Lỗi'),
-                            content: const Text('Nội dung tin nhắn không được để trống!'),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(context),
-                                child: const Text('Đóng'),
-                              ),
-                            ],
-                          ),
-                        );
-                        return;
-                      }
-
-                      final phones = await _getSelectedCustomerPhones();
-                      Navigator.pop(context);
-                      await _sendSMS(phones, messageController.text);
-                    },
-                    child: const Text('SMS'),
-                  ),
-                  ElevatedButton(
-                    onPressed: () async {
-                      if (messageController.text.isEmpty) {
-                        await showDialog(
-                          context: context,
-                          builder: (context) => AlertDialog(
-                            title: const Text('Lỗi'),
-                            content: const Text('Nội dung tin nhắn không được để trống!'),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(context),
-                                child: const Text('Đóng'),
-                              ),
-                            ],
-                          ),
-                        );
-                        return;
-                      }
-
-                      final phones = await _getSelectedCustomerPhones();
-                      Navigator.pop(context);
-                      await _sendZalo(phones, messageController.text);
-                    },
-                    child: const Text('Zalo'),
-                  ),
-                  ElevatedButton(
-                    onPressed: () async {
-                      if (messageController.text.isEmpty) {
-                        await showDialog(
-                          context: context,
-                          builder: (context) => AlertDialog(
-                            title: const Text('Lỗi'),
-                            content: const Text('Nội dung tin nhắn không được để trống!'),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(context),
-                                child: const Text('Đóng'),
-                              ),
-                            ],
-                          ),
-                        );
-                        return;
-                      }
-
-                      final phones = await _getSelectedCustomerPhones();
-                      Navigator.pop(context);
-                      await _sendTelegram(phones, messageController.text);
-                    },
-                    child: const Text('Telegram'),
-                  ),
-                ],
-              ),
             ],
           ),
         ),
@@ -869,6 +706,36 @@ class _CRMScreenState extends State<CRMScreen> {
               messageController.clear();
             },
             child: const Text('Hủy'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              if (messageController.text.isEmpty) {
+                await showDialog(
+                  context: context,
+                  builder: (context) => AlertDialog(
+                    title: const Text('Lỗi'),
+                    content: const Text('Nội dung tin nhắn không được để trống!'),
+                    actions: [
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('Đóng'),
+                      ),
+                    ],
+                  ),
+                );
+                return;
+              }
+
+              final phones = await _getSelectedCustomerPhones();
+              Navigator.pop(context);
+              await _sendSMS(phones, messageController.text);
+              messageController.clear();
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.blue,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Gửi tin nhắn'),
           ),
         ],
       ),
