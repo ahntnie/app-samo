@@ -41,9 +41,11 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
 
   double revenue = 0;
   double profit = 0;
+  double profitAfterCost = 0;
   double companyValue = 0;
   double totalIncome = 0;
   double totalExpense = 0;
+  double totalCost = 0;
   double totalSupplierDebt = 0;
   double totalCustomerDebt = 0;
   double totalFixerDebt = 0;
@@ -480,6 +482,8 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
         }
       }
 
+      double totalCostValue = 0;
+      
       for (final transaction in financialOrders) {
         final amountRaw = transaction['amount'];
         final amount = amountRaw is String ? num.tryParse(amountRaw)?.toDouble() ?? 0.0 : (amountRaw as num?)?.toDouble() ?? 0.0;
@@ -499,6 +503,8 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
             totalInc += amountInVnd;
           } else if (type == 'payment') {
             totalExp += amountInVnd;
+          } else if (type == 'cost') {
+            totalCostValue += amountInVnd;
           }
 
           int pointIndex = -1;
@@ -555,6 +561,8 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
       setState(() {
         revenue = totalRev;
         profit = totalProfit;
+        totalCost = totalCostValue;
+        profitAfterCost = totalProfit - totalCostValue;
         totalIncome = totalInc;
         totalExpense = totalExp;
         totalSupplierDebt = totalSupplierDebtValue;
@@ -586,6 +594,8 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
       setState(() {
         revenue = 0;
         profit = 0;
+        profitAfterCost = 0;
+        totalCost = 0;
         soldProductsCount = 0;
         companyValue = 0;
       });
@@ -894,6 +904,10 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
           _buildHeaderTile('Doanh số', '$soldProductsCount sp / ${formatMoney(revenue)} VND', Colors.green),
           if (widget.permissions.contains('view_profit'))
             _buildHeaderTile('Lợi nhuận', '${formatMoney(profit)} VND', Colors.orange),
+          if (widget.permissions.contains('view_profit'))
+            _buildHeaderTile('Chi phí', '${formatMoney(totalCost)} VND', Colors.red),
+          if (widget.permissions.contains('view_profit'))
+            _buildHeaderTile('Lợi nhuận sau chi phí', '${formatMoney(profitAfterCost)} VND', profitAfterCost >= 0 ? Colors.blue : Colors.red),
           _buildLineChart('Doanh số và lợi nhuận theo thời gian', revenueSpots, Colors.green, spots2: profitSpots, color2: Colors.orange),
         ],
       ),
