@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../helpers/error_handler.dart';
 
 class WarehouseForm extends StatefulWidget {
   final SupabaseClient tenantClient;

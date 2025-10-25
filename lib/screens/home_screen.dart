@@ -18,6 +18,7 @@ import 'excel_report_screen.dart';
 import 'orders_screen.dart';
 import 'categories_screen.dart';
 import 'package:firebase_core/firebase_core.dart';
+import '../helpers/global_cache_manager.dart';
 
 class HomeScreen extends StatefulWidget {
   final SupabaseClient tenantClient;
@@ -94,6 +95,20 @@ class _HomeScreenState extends State<HomeScreen> {
     _initializeNotifications();
     _loadSavedPreferences();
     _checkAutoLogin();
+    _startBackgroundSync();
+  }
+
+  void _startBackgroundSync() {
+    // Start background cache sync
+    GlobalCacheManager().startBackgroundSync(widget.tenantClient);
+    print('🔄 Background cache sync started');
+  }
+
+  @override
+  void dispose() {
+    // Stop background sync when leaving screen
+    GlobalCacheManager().stopBackgroundSync();
+    super.dispose();
   }
 
   Future<void> _initializeNotifications() async {

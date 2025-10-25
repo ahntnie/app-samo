@@ -6,22 +6,29 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:open_file/open_file.dart';
 import 'dart:io';
 import 'dart:async';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
+import 'package:barcode/barcode.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../helpers/global_cache_manager.dart';
 
-// Cache utility class
+// Backward compatibility alias
 class CacheUtil {
-  static final Map<String, String> productNameCache = {};
-  static final Map<String, String> warehouseNameCache = {};
-  static final Map<String, String> supplierNameCache = {};
-  static final Map<String, String> fixerNameCache = {};
-
-  static void cacheProductName(String id, String name) => productNameCache[id] = name;
-  static void cacheWarehouseName(String id, String name) => warehouseNameCache[id] = name;
-  static void cacheSupplierName(String id, String name) => supplierNameCache[id] = name;
-  static void cacheFixerName(String id, String name) => fixerNameCache[id] = name;
-  static String getProductName(String? id) => id != null ? productNameCache[id] ?? 'Không xác định' : 'Không xác định';
-  static String getWarehouseName(String? id) => id != null ? warehouseNameCache[id] ?? 'Không xác định' : 'Không xác định';
-  static String getSupplierName(String? id) => id != null ? supplierNameCache[id] ?? 'Không xác định' : 'Không xác định';
-  static String getFixerName(String? id) => id != null ? fixerNameCache[id] ?? 'Không xác định' : 'Không xác định';
+  static Map<String, String> get productNameCache => GlobalCacheManager().productNameCache;
+  static Map<String, String> get warehouseNameCache => GlobalCacheManager().warehouseNameCache;
+  static Map<String, String> get supplierNameCache => GlobalCacheManager().supplierNameCache;
+  static Map<String, String> get fixerNameCache => GlobalCacheManager().fixerNameCache;
+  
+  static void cacheProductName(String id, String name) => GlobalCacheManager().cacheProductName(id, name);
+  static void cacheWarehouseName(String id, String name) => GlobalCacheManager().cacheWarehouseName(id, name);
+  static void cacheSupplierName(String id, String name) => GlobalCacheManager().cacheSupplierName(id, name);
+  static void cacheFixerName(String id, String name) => GlobalCacheManager().cacheFixerName(id, name);
+  
+  static String getProductName(String? id) => GlobalCacheManager().getProductName(id);
+  static String getWarehouseName(String? id) => GlobalCacheManager().getWarehouseName(id);
+  static String getSupplierName(String? id) => GlobalCacheManager().getSupplierName(id);
+  static String getFixerName(String? id) => GlobalCacheManager().getFixerName(id);
 }
 
 class InventoryScreen extends StatefulWidget {
@@ -55,10 +62,15 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
   Map<int, bool> isEditingNote = {};
   Map<int, TextEditingController> noteControllers = {};
+  
+  // Lưu lựa chọn mặc định
+  String _defaultPrintType = 'a4'; // 'a4' hoặc 'thermal'
+  int _defaultLabelsPerRow = 1; // 1, 2, hoặc 3
 
   @override
   void initState() {
     super.initState();
+    _loadPrintSettings();
     _fetchInventoryData();
 
     _scrollController.addListener(() {
@@ -73,6 +85,28 @@ class _InventoryScreenState extends State<InventoryScreen> {
     });
 
     searchController.addListener(_onSearchChanged);
+  }
+  
+  Future<void> _loadPrintSettings() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      setState(() {
+        _defaultPrintType = prefs.getString('default_print_type') ?? 'a4';
+        _defaultLabelsPerRow = prefs.getInt('default_labels_per_row') ?? 1;
+      });
+    } catch (e) {
+      // Ignore errors, use defaults
+    }
+  }
+  
+  Future<void> _savePrintSettings(String printType, int labelsPerRow) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('default_print_type', printType);
+      await prefs.setInt('default_labels_per_row', labelsPerRow);
+    } catch (e) {
+      // Ignore errors
+    }
   }
 
   void _onSearchChanged() {
@@ -110,37 +144,18 @@ class _InventoryScreenState extends State<InventoryScreen> {
     });
 
     try {
-      // Fetch product name cache
-      final productResponse = await widget.tenantClient.from('products_name').select('id, products');
-      for (var product in productResponse) {
-        CacheUtil.cacheProductName(product['id'].toString(), product['products'] as String);
-      }
+      // Sử dụng GlobalCacheManager - tự động skip nếu đã có cache
+      final cacheManager = GlobalCacheManager();
+      await Future.wait([
+        cacheManager.fetchAndCacheProducts(widget.tenantClient),
+        cacheManager.fetchAndCacheWarehouses(widget.tenantClient),
+        cacheManager.fetchAndCacheSuppliers(widget.tenantClient),
+        cacheManager.fetchAndCacheFixers(widget.tenantClient),
+      ]);
 
-      // Fetch warehouse name cache and update warehouse options
-      final warehouseResponse = await widget.tenantClient.from('warehouses').select('id, name');
+      // Build warehouse options từ cache
       List<String> warehouseNames = ['Tất cả'];
-      for (var warehouse in warehouseResponse) {
-        final id = warehouse['id'].toString();
-        final name = warehouse['name'] as String;
-        CacheUtil.cacheWarehouseName(id, name);
-        warehouseNames.add(name);
-      }
-      
-      // Fetch supplier name cache
-      final supplierResponse = await widget.tenantClient.from('suppliers').select('id, name');
-      for (var supplier in supplierResponse) {
-        final id = supplier['id'].toString();
-        final name = supplier['name'] as String;
-        CacheUtil.cacheSupplierName(id, name);
-      }
-      
-      // Fetch fixer name cache
-      final fixerResponse = await widget.tenantClient.from('fix_units').select('id, name');
-      for (var fixer in fixerResponse) {
-        final id = fixer['id'].toString();
-        final name = fixer['name'] as String;
-        CacheUtil.cacheFixerName(id, name);
-      }
+      warehouseNames.addAll(cacheManager.warehouseNameCache.values);
       
       setState(() {
         warehouseOptions = warehouseNames;
@@ -449,6 +464,310 @@ class _InventoryScreenState extends State<InventoryScreen> {
     }
   }
 
+  Future<void> _printLabels() async {
+    // Hiển thị dialog đơn giản với option ghi nhớ
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Cài đặt in tem'),
+        content: SingleChildScrollView(
+          child: _PrintSettingsDialog(
+            defaultPrintType: _defaultPrintType,
+            defaultLabelsPerRow: _defaultLabelsPerRow,
+          ),
+        ),
+      ),
+    );
+
+    if (result == null) return;
+
+    final printType = result['printType'] as String;
+    final labelsPerRow = result['labelsPerRow'] as int;
+    final saveAsDefault = result['saveAsDefault'] as bool;
+
+    // Lưu cài đặt nếu user chọn
+    if (saveAsDefault) {
+      await _savePrintSettings(printType, labelsPerRow);
+      setState(() {
+        _defaultPrintType = printType;
+        _defaultLabelsPerRow = labelsPerRow;
+      });
+    }
+
+    try {
+      // Lấy dữ liệu đã lọc
+      var query = widget.tenantClient
+          .from('products')
+          .select('id, product_id, imei, status');
+
+      final queryText = searchController.text.toLowerCase();
+      
+      // Tìm kiếm theo tên sản phẩm từ cache
+      List<String> matchingProductIds = [];
+      if (queryText.isNotEmpty) {
+        CacheUtil.productNameCache.forEach((id, name) {
+          if (name.toLowerCase().contains(queryText)) {
+            matchingProductIds.add(id);
+          }
+        });
+      }
+
+      if (queryText.isNotEmpty) {
+        if (matchingProductIds.isNotEmpty) {
+          final productIdConditions = matchingProductIds.map((id) => 'product_id.eq.$id').join(',');
+          query = query.or('imei.ilike.%$queryText%,note.ilike.%$queryText%,$productIdConditions');
+        } else {
+          query = query.or('imei.ilike.%$queryText%,note.ilike.%$queryText%');
+        }
+      }
+
+      if (filterOptions.contains(selectedFilter) &&
+          selectedFilter != 'Tất cả' &&
+          selectedFilter != 'Tồn kho mới nhất' &&
+          selectedFilter != 'Tồn kho lâu nhất') {
+        query = query.eq('status', selectedFilter);
+      }
+
+      if (selectedWarehouse != 'Tất cả') {
+        final warehouseId = CacheUtil.warehouseNameCache.entries
+            .firstWhere((entry) => entry.value == selectedWarehouse, orElse: () => MapEntry('', ''))
+            .key;
+        if (warehouseId.isNotEmpty) {
+          query = query.eq('warehouse_id', warehouseId);
+        }
+      }
+
+      final response = await query;
+      List<Map<String, dynamic>> allItems = response.cast<Map<String, dynamic>>();
+      allItems = _filterInventory(allItems);
+
+      if (allItems.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Không có dữ liệu để in')),
+        );
+        return;
+      }
+
+      // Tạo PDF với tem nhãn
+      final pdf = pw.Document();
+      
+      // Tạo barcode generator
+      final barcodeGen = Barcode.code128();
+      
+      if (printType == 'thermal') {
+        // In tem nhiệt - hỗ trợ nhiều layout
+        if (labelsPerRow == 1) {
+          // Layout 1 tem/hàng (cuộn 40mm)
+          for (var item in allItems) {
+            pdf.addPage(
+              pw.Page(
+                pageFormat: const PdfPageFormat(
+                  40 * PdfPageFormat.mm,  // Width: 40mm
+                  30 * PdfPageFormat.mm,  // Height: 30mm
+                  marginAll: 1 * PdfPageFormat.mm,
+                ),
+                build: (context) => _buildThermalLabel(item, barcodeGen),
+              ),
+            );
+          }
+        } else {
+          // Layout 2 hoặc 3 tem/hàng (cuộn rộng)
+          final pageWidth = labelsPerRow == 2 
+              ? 85 * PdfPageFormat.mm  // 2 tem: 40*2 + gap 5mm
+              : 125 * PdfPageFormat.mm; // 3 tem: 40*3 + gap 5mm*2
+          
+          for (int i = 0; i < allItems.length; i += labelsPerRow) {
+            final rowItems = allItems.skip(i).take(labelsPerRow).toList();
+            
+            pdf.addPage(
+              pw.Page(
+                pageFormat: PdfPageFormat(
+                  pageWidth,
+                  30 * PdfPageFormat.mm,  // Height cố định
+                  marginAll: 1 * PdfPageFormat.mm,
+                ),
+                build: (context) {
+                  return pw.Row(
+                    mainAxisAlignment: pw.MainAxisAlignment.spaceEvenly,
+                    children: rowItems.map((item) {
+                      return pw.Container(
+                        width: 38 * PdfPageFormat.mm, // 40mm - margin
+                        child: _buildThermalLabel(item, barcodeGen),
+                      );
+                    }).toList(),
+                  );
+                },
+              ),
+            );
+          }
+        }
+      } else {
+        // In A4 - 4 tem trên 1 trang (2x2)
+        const itemsPerPage = 4;
+        for (int i = 0; i < allItems.length; i += itemsPerPage) {
+          final pageItems = allItems.skip(i).take(itemsPerPage).toList();
+          
+          pdf.addPage(
+            pw.Page(
+              pageFormat: PdfPageFormat.a4,
+              margin: const pw.EdgeInsets.all(20),
+              build: (context) {
+                return pw.Column(
+                  children: [
+                    // Hàng đầu tiên (2 tem)
+                    pw.Row(
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
+                      children: [
+                        if (pageItems.isNotEmpty) 
+                          pw.Expanded(child: _buildA4Label(pageItems[0], barcodeGen)),
+                        pw.SizedBox(width: 10),
+                        if (pageItems.length > 1) 
+                          pw.Expanded(child: _buildA4Label(pageItems[1], barcodeGen))
+                        else
+                          pw.Expanded(child: pw.Container()),
+                      ],
+                    ),
+                    pw.SizedBox(height: 20),
+                    // Hàng thứ hai (2 tem)
+                    pw.Row(
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
+                      children: [
+                        if (pageItems.length > 2) 
+                          pw.Expanded(child: _buildA4Label(pageItems[2], barcodeGen))
+                        else
+                          pw.Expanded(child: pw.Container()),
+                        pw.SizedBox(width: 10),
+                        if (pageItems.length > 3) 
+                          pw.Expanded(child: _buildA4Label(pageItems[3], barcodeGen))
+                        else
+                          pw.Expanded(child: pw.Container()),
+                      ],
+                    ),
+                  ],
+                );
+              },
+            ),
+          );
+        }
+      }
+
+      // Hiển thị preview và in
+      await Printing.layoutPdf(
+        onLayout: (format) async => pdf.save(),
+        name: 'Tem_Nhan_IMEI_${DateTime.now().millisecondsSinceEpoch}.pdf',
+      );
+
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Lỗi khi in tem nhãn: $e')),
+      );
+    }
+  }
+
+  // Tem cho máy in nhiệt 40x30mm (tối ưu cho không gian nhỏ)
+  pw.Widget _buildThermalLabel(Map<String, dynamic> item, Barcode barcodeGen) {
+    final productId = item['product_id']?.toString() ?? '';
+    final imei = item['imei']?.toString() ?? '';
+    final productName = CacheUtil.getProductName(productId);
+
+    return pw.Container(
+      decoration: pw.BoxDecoration(
+        border: pw.Border.all(color: PdfColors.black, width: 0.5),
+      ),
+      child: pw.Column(
+        mainAxisAlignment: pw.MainAxisAlignment.center,
+        children: [
+          // Tên sản phẩm (rút gọn để vừa tem nhỏ)
+          pw.Padding(
+            padding: const pw.EdgeInsets.symmetric(horizontal: 2),
+            child: pw.Text(
+              productName,
+              style: pw.TextStyle(
+                fontSize: 7,  // Font nhỏ hơn cho tem nhiệt
+                fontWeight: pw.FontWeight.bold,
+              ),
+              textAlign: pw.TextAlign.center,
+              maxLines: 1,
+              overflow: pw.TextOverflow.clip,
+            ),
+          ),
+          pw.SizedBox(height: 1),
+          // Mã vạch (chiếm phần lớn không gian)
+          pw.Container(
+            height: 16,  // Chiều cao tối ưu cho tem 30mm
+            padding: const pw.EdgeInsets.symmetric(horizontal: 2),
+            child: pw.BarcodeWidget(
+              barcode: barcodeGen,
+              data: imei,
+              drawText: false,
+              width: 36,  // Width tối đa cho tem 40mm
+            ),
+          ),
+          pw.SizedBox(height: 1),
+          // Số IMEI
+          pw.Text(
+            imei,
+            style: const pw.TextStyle(
+              fontSize: 5,  // Font rất nhỏ để vừa tem
+            ),
+            textAlign: pw.TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Tem cho giấy A4 (có nhiều không gian hơn)
+  pw.Widget _buildA4Label(Map<String, dynamic> item, Barcode barcodeGen) {
+    final productId = item['product_id']?.toString() ?? '';
+    final imei = item['imei']?.toString() ?? '';
+    final productName = CacheUtil.getProductName(productId);
+
+    return pw.Container(
+      decoration: pw.BoxDecoration(
+        border: pw.Border.all(color: PdfColors.black, width: 1),
+        borderRadius: const pw.BorderRadius.all(pw.Radius.circular(4)),
+      ),
+      padding: const pw.EdgeInsets.all(8),
+      child: pw.Column(
+        mainAxisAlignment: pw.MainAxisAlignment.center,
+        children: [
+          // Tên sản phẩm
+          pw.Text(
+            productName,
+            style: pw.TextStyle(
+              fontSize: 12,
+              fontWeight: pw.FontWeight.bold,
+            ),
+            textAlign: pw.TextAlign.center,
+            maxLines: 2,
+            overflow: pw.TextOverflow.clip,
+          ),
+          pw.SizedBox(height: 8),
+          // Mã vạch
+          pw.Container(
+            height: 60,
+            child: pw.BarcodeWidget(
+              barcode: barcodeGen,
+              data: imei,
+              drawText: false,
+            ),
+          ),
+          pw.SizedBox(height: 4),
+          // Số IMEI
+          pw.Text(
+            imei,
+            style: const pw.TextStyle(
+              fontSize: 10,
+            ),
+            textAlign: pw.TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+
+
   Future<void> _exportToExcel() async {
     if (isExporting) return;
 
@@ -679,7 +998,6 @@ class _InventoryScreenState extends State<InventoryScreen> {
   void _showProductDetails(Map<String, dynamic> product) async {
     final productId = product['id'] as int;
     final productNameId = product['product_id']?.toString();
-    final imei = product['imei']?.toString() ?? '';
 
     String? customer = product['customer']?.toString();
     String? supplier;
@@ -990,16 +1308,205 @@ class _InventoryScreenState extends State<InventoryScreen> {
           Positioned(
             bottom: 16,
             right: 16,
-            child: FloatingActionButton.extended(
-              onPressed: _exportToExcel,
-              label: const Text('Xuất Excel'),
-              icon: const Icon(Icons.file_download),
-              backgroundColor: Colors.blue,
-              foregroundColor: Colors.white,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                FloatingActionButton.extended(
+                  onPressed: _printLabels,
+                  label: const Text('In Tem'),
+                  icon: const Icon(Icons.print),
+                  backgroundColor: Colors.green,
+                  foregroundColor: Colors.white,
+                  heroTag: 'print_btn',
+                ),
+                const SizedBox(height: 12),
+                FloatingActionButton.extended(
+                  onPressed: _exportToExcel,
+                  label: const Text('Xuất Excel'),
+                  icon: const Icon(Icons.file_download),
+                  backgroundColor: Colors.blue,
+                  foregroundColor: Colors.white,
+                  heroTag: 'excel_btn',
+                ),
+              ],
             ),
           ),
         ],
       ),
+    );
+  }
+}
+
+// Widget dialog cài đặt in tem đơn giản
+class _PrintSettingsDialog extends StatefulWidget {
+  final String defaultPrintType;
+  final int defaultLabelsPerRow;
+
+  const _PrintSettingsDialog({
+    required this.defaultPrintType,
+    required this.defaultLabelsPerRow,
+  });
+
+  @override
+  State<_PrintSettingsDialog> createState() => _PrintSettingsDialogState();
+}
+
+class _PrintSettingsDialogState extends State<_PrintSettingsDialog> {
+  late String _selectedPrintType;
+  late int _selectedLabelsPerRow;
+  bool _saveAsDefault = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedPrintType = widget.defaultPrintType;
+    _selectedLabelsPerRow = widget.defaultLabelsPerRow;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Loại máy in
+        const Text(
+          'Loại máy in:',
+          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+        ),
+        const SizedBox(height: 8),
+        RadioListTile<String>(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Máy in thông thường (A4)'),
+          subtitle: const Text('In 4 tem trên 1 tờ giấy A4', style: TextStyle(fontSize: 12)),
+          value: 'a4',
+          groupValue: _selectedPrintType,
+          onChanged: (value) {
+            setState(() {
+              _selectedPrintType = value!;
+            });
+          },
+        ),
+        RadioListTile<String>(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Máy in tem nhiệt'),
+          subtitle: const Text('Cuộn tem nhãn (mọi loại máy)', style: TextStyle(fontSize: 12)),
+          value: 'thermal',
+          groupValue: _selectedPrintType,
+          onChanged: (value) {
+            setState(() {
+              _selectedPrintType = value!;
+            });
+          },
+        ),
+        
+        // Layout (chỉ hiện khi chọn tem nhiệt)
+        if (_selectedPrintType == 'thermal') ...[
+          const Divider(),
+          const SizedBox(height: 8),
+          const Text(
+            'Số tem trên 1 hàng:',
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            'Tùy thuộc độ rộng cuộn giấy của máy bạn',
+            style: TextStyle(fontSize: 11, color: Colors.grey),
+          ),
+          const SizedBox(height: 8),
+          RadioListTile<int>(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            title: const Text('1 tem/hàng'),
+            subtitle: const Text('Cuộn 40mm (phổ biến nhất)', style: TextStyle(fontSize: 12)),
+            value: 1,
+            groupValue: _selectedLabelsPerRow,
+            onChanged: (value) {
+              setState(() {
+                _selectedLabelsPerRow = value!;
+              });
+            },
+          ),
+          RadioListTile<int>(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            title: const Text('2 tem/hàng'),
+            subtitle: const Text('Cuộn 80-90mm', style: TextStyle(fontSize: 12)),
+            value: 2,
+            groupValue: _selectedLabelsPerRow,
+            onChanged: (value) {
+              setState(() {
+                _selectedLabelsPerRow = value!;
+              });
+            },
+          ),
+          RadioListTile<int>(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            title: const Text('3 tem/hàng'),
+            subtitle: const Text('Cuộn 120-130mm', style: TextStyle(fontSize: 12)),
+            value: 3,
+            groupValue: _selectedLabelsPerRow,
+            onChanged: (value) {
+              setState(() {
+                _selectedLabelsPerRow = value!;
+              });
+            },
+          ),
+        ],
+        
+        const Divider(),
+        const SizedBox(height: 8),
+        
+        // Checkbox ghi nhớ
+        CheckboxListTile(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Ghi nhớ và dùng làm mặc định'),
+          subtitle: const Text(
+            'Lần sau sẽ tự động dùng cài đặt này',
+            style: TextStyle(fontSize: 11),
+          ),
+          value: _saveAsDefault,
+          onChanged: (value) {
+            setState(() {
+              _saveAsDefault = value ?? false;
+            });
+          },
+        ),
+        
+        const SizedBox(height: 16),
+        
+        // Buttons
+        Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Hủy'),
+            ),
+            const SizedBox(width: 8),
+            ElevatedButton.icon(
+              onPressed: () {
+                Navigator.pop(context, {
+                  'printType': _selectedPrintType,
+                  'labelsPerRow': _selectedLabelsPerRow,
+                  'saveAsDefault': _saveAsDefault,
+                });
+              },
+              icon: const Icon(Icons.print),
+              label: const Text('In Tem'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.green,
+                foregroundColor: Colors.white,
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }

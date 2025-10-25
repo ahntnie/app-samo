@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../helpers/error_handler.dart';
+import '../helpers/cache_helper.dart';
 
 // Cache manager cho CRM
 class CRMCacheManager {
@@ -598,7 +600,7 @@ class _CRMScreenState extends State<CRMScreen> {
                 }
 
                 try {
-                  await widget.tenantClient.from('customers').insert({
+                  final insertResponse = await widget.tenantClient.from('customers').insert({
                     'name': nameController.text,
                     'phone': phoneController.text,
                     'social_link': socialLinkController.text,
@@ -608,7 +610,12 @@ class _CRMScreenState extends State<CRMScreen> {
                     'debt_cny': 0,
                     'debt_usd': 0,
                     if (birthday != null) 'birthday': birthday,
-                  });
+                  }).select('id, name').single();
+                  
+                  // ✅ Cache customer ngay sau khi tạo
+                  final newCustomerId = insertResponse['id'].toString();
+                  final newCustomerName = insertResponse['name'] as String;
+                  CacheHelper.cacheCustomer(newCustomerId, newCustomerName);
 
                   Navigator.pop(context);
                   await showDialog(

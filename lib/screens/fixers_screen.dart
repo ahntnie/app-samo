@@ -6,6 +6,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:open_file/open_file.dart';
 import 'dart:io';
 import 'dart:developer' as developer;
+import '../helpers/export_progress_dialog.dart';
+import '../helpers/error_handler.dart';
 
 // Cache utility class
 class CacheUtil {
@@ -621,6 +623,10 @@ class _FixerDetailsDialogState extends State<FixerDetailsDialog> {
       return;
     }
 
+    // Hiển thị progress dialog
+    if (!mounted) return;
+    ExportProgressDialog.show(context);
+
     try {
       List<Map<String, dynamic>> exportTransactions = filteredTransactions;
       if (hasMoreData && startDate == null && endDate == null) {
@@ -808,12 +814,17 @@ class _FixerDetailsDialogState extends State<FixerDetailsDialog> {
       }
       await file.writeAsBytes(excelBytes);
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Đã xuất file Excel: $filePath')),
-      );
+      // Đóng progress dialog
+      if (mounted) ExportProgressDialog.hide(context);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Đã xuất file Excel: $filePath')),
+        );
+      }
 
       final openResult = await OpenFile.open(filePath);
-      if (openResult.type != ResultType.done) {
+      if (openResult.type != ResultType.done && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Không thể mở file. File đã được lưu tại: $filePath'),
@@ -821,9 +832,21 @@ class _FixerDetailsDialogState extends State<FixerDetailsDialog> {
         );
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Lỗi khi xuất file Excel: $e')),
-      );
+      // Đóng progress dialog nếu có lỗi
+      if (mounted) ExportProgressDialog.hide(context);
+      
+      if (mounted) {
+        final shouldRetry = await ErrorHandler.showErrorDialog(
+          context: context,
+          title: 'Lỗi xuất Excel',
+          error: e,
+          showRetry: true,
+        );
+        
+        if (shouldRetry) {
+          await _exportToExcel();
+        }
+      }
     }
   }
 

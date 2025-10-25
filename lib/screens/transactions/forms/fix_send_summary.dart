@@ -4,6 +4,7 @@ import '../../notification_service.dart';
 import 'fix_send_form.dart';
 import 'dart:math' as math;
 import 'package:intl/intl.dart';
+import '../../../helpers/error_handler.dart';
 
 // Constants for batch processing and limits
 const int maxBatchSize = 1000;

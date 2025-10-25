@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import '../../notification_service.dart';
 import 'return_form.dart';
 import 'dart:math' as math;
+import '../../../../helpers/error_handler.dart';
 
 class ReturnSummary extends StatefulWidget {
   final SupabaseClient tenantClient;
@@ -246,170 +247,58 @@ class _ReturnSummaryState extends State<ReturnSummary> {
     return true;
   }
 
-  Future<void> _rollbackChanges(Map<String, dynamic> snapshot, String ticketId) async {
+  /// ✅ NEW: Validate return prices against import prices
+  Future<Map<String, dynamic>> _validateReturnPrices() async {
     final supabase = widget.tenantClient;
-    
-    try {
-      // Rollback suppliers
-      if (snapshot['suppliers'] != null) {
-        final suppliersData = snapshot['suppliers'];
-        if (suppliersData is List) {
-          for (var supplierData in suppliersData) {
-            await supabase
-              .from('suppliers')
-              .update(supplierData)
-              .eq('name', supplierData['name']);
-          }
-        } else {
-          // Backward compatibility for old snapshots
-          await supabase
-            .from('suppliers')
-            .update(suppliersData)
-            .eq('name', widget.supplier);
-        }
-      }
+    final warnings = <String>[];
+    int totalOverpriced = 0;
+    num totalLoss = 0;
 
-      // Rollback financial accounts
-      if (snapshot['financial_accounts'] != null && account != null) {
-        await supabase
-          .from('financial_accounts')
-          .update(snapshot['financial_accounts'])
-          .eq('name', account!)
-          .inFilter('currency', widget.ticketItems.map((e) => e['currency']).toList());
-      }
+    for (final item in widget.ticketItems) {
+      final imeiList = (item['imei'] as String).split(',').where((e) => e.trim().isNotEmpty).toList();
+      final returnPrice = (item['price'] as num?) ?? 0;
+      final returnCurrency = item['currency'] as String? ?? 'VND';
+      final productName = item['product_name'] as String? ?? 'Sản phẩm';
 
-      // Rollback products
-      if (snapshot['products'] != null) {
-        for (var product in snapshot['products']) {
-          await supabase
-            .from('products')
-            .update(product)
-            .eq('imei', product['imei']);
-        }
-      }
+      if (imeiList.isEmpty) continue;
 
-      // Delete created return orders
-      await supabase
-        .from('return_orders')
-        .delete()
-        .eq('ticket_id', ticketId);
-
-    } catch (e) {
-      print('Error during rollback: $e');
-      throw Exception('Lỗi khi rollback dữ liệu: $e');
-    }
-  }
-
-  Future<bool> _verifyData(String ticketId, List<String> imeiList) async {
-    final supabase = widget.tenantClient;
-    
-    try {
-      // Verify supplier data
-      final supplierData = await supabase
-          .from('suppliers')
-          .select()
-          .eq('name', widget.supplier)
-          .single();
-      
-      // Verify products data
-      final productsData = await supabase
+      // Get import prices for all IMEIs
+      final imeiResponse = await supabase
           .from('products')
-          .select('status')
+          .select('imei, import_price, import_currency')
           .inFilter('imei', imeiList);
-      
-      // Verify return orders
-      final returnOrders = await supabase
-          .from('return_orders')
-          .select()
-          .eq('ticket_id', ticketId);
 
-      // Verify all IMEIs are marked as returned
-      for (var product in productsData) {
-        if (product['status'] != 'Đã trả ncc') {
-          return false;
+      for (var product in imeiResponse) {
+        final imei = product['imei'] as String;
+        final importPrice = (product['import_price'] as num?) ?? 0;
+        final importCurrency = product['import_currency'] as String? ?? 'VND';
+
+        // Only compare if same currency
+        if (returnCurrency == importCurrency && returnPrice > importPrice) {
+          totalOverpriced++;
+          final loss = returnPrice - importPrice;
+          totalLoss += loss;
+          warnings.add(
+            '• $productName (${imei.substring(0, imei.length > 8 ? 8 : imei.length)}...): '
+            'Giá trả ${_formatCurrency(returnPrice, returnCurrency)} '
+            '> Giá nhập ${_formatCurrency(importPrice, importCurrency)} '
+            '(Lỗ: ${_formatCurrency(loss, returnCurrency)})'
+          );
         }
       }
-
-      // Verify all return orders are created
-      if (returnOrders.length != widget.ticketItems.length) {
-        return false;
-      }
-
-      // Verify financial account if used
-      if (account != null && account != 'Công nợ') {
-        final accountData = await supabase
-            .from('financial_accounts')
-            .select()
-            .eq('name', account!)
-            .inFilter('currency', widget.ticketItems.map((e) => e['currency']).toList())
-            .single();
-      }
-
-      return true;
-    } catch (e) {
-      print('Error during data verification: $e');
-      return false;
     }
+
+    return {
+      'hasWarning': warnings.isNotEmpty,
+      'warnings': warnings,
+      'totalOverpriced': totalOverpriced,
+      'totalLoss': totalLoss,
+    };
   }
 
-  Future<void> _processTicket() async {
-    if (isProcessing) return;
-
-    setState(() {
-      isProcessing = true;
-      errorMessage = null;
-    });
-
-    final ticketId = DateTime.now().millisecondsSinceEpoch.toString();
-    final allImeis = widget.ticketItems
-        .expand((item) => (item['imei'] as String)
-            .split(',')
-            .where((e) => e.trim().isNotEmpty))
-        .toList();
-
-    // Create snapshot before any changes
-    Map<String, dynamic> snapshot;
-    try {
-      snapshot = await _createSnapshot(ticketId, allImeis);
-    } catch (e) {
-      setState(() {
-        isProcessing = false;
-        errorMessage = 'Lỗi khi tạo snapshot: $e';
-      });
-      return;
-    }
-
-    try {
-      // Existing processing logic here
-      // ... (keep your current _processTicket implementation)
-
-      // After all updates, verify the data
-      final isDataValid = await _verifyData(ticketId, allImeis);
-      if (!isDataValid) {
-        // If data verification fails, rollback changes
-        await _rollbackChanges(snapshot, ticketId);
-        throw Exception('Dữ liệu không khớp sau khi cập nhật. Đã rollback thay đổi.');
-      }
-
-      // If everything is successful, show success message
-      if (mounted) {
-        Navigator.of(context).pop(true);
-      }
-    } catch (e) {
-      // If any error occurs, rollback changes
-      try {
-        await _rollbackChanges(snapshot, ticketId);
-      } catch (rollbackError) {
-        print('Rollback failed: $rollbackError');
-      }
-
-      if (mounted) {
-        setState(() {
-          isProcessing = false;
-          errorMessage = e.toString();
-        });
-      }
-    }
+  String _formatCurrency(num amount, String currency) {
+    final formatted = numberFormat.format(amount).replaceAll(',', '.');
+    return '$formatted $currency';
   }
 
   void showConfirmDialog(BuildContext scaffoldContext) async {
@@ -535,6 +424,104 @@ class _ReturnSummaryState extends State<ReturnSummary> {
         debugPrint('Error validating foreign keys: $e');
       }
       return;
+    }
+
+    // ✅ NEW: Kiểm tra giá trả so với giá nhập
+    try {
+      final priceValidation = await _validateReturnPrices();
+      if (priceValidation['hasWarning'] == true) {
+        if (mounted) {
+          Navigator.pop(scaffoldContext); // Đóng dialog "Đang xử lý"
+          
+          // Hiển thị cảnh báo với option tiếp tục hoặc hủy
+          final shouldContinue = await showDialog<bool>(
+            context: scaffoldContext,
+            builder: (context) => AlertDialog(
+              title: const Row(
+                children: [
+                  Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 28),
+                  SizedBox(width: 8),
+                  Text('Cảnh báo: Giá Trả Cao'),
+                ],
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Phát hiện ${priceValidation['totalOverpriced']} sản phẩm có giá trả cao hơn giá nhập, '
+                      'gây lỗ tổng cộng: ${_formatCurrency(priceValidation['totalLoss'], widget.currency)}',
+                      style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.red),
+                    ),
+                    const SizedBox(height: 12),
+                    const Text('Chi tiết:', style: TextStyle(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    ...(priceValidation['warnings'] as List<String>).map((warning) => 
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Text(warning, style: const TextStyle(fontSize: 13)),
+                      )
+                    ),
+                    const SizedBox(height: 12),
+                    const Text(
+                      'Điều này có thể do:\n'
+                      '• Nhập sai giá trả\n'
+                      '• NCC đồng ý đổi giá\n'
+                      '• Trả hàng có chi phí phát sinh',
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Bạn có chắc chắn muốn tiếp tục?',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('Hủy - Kiểm tra lại', style: TextStyle(color: Colors.grey)),
+                ),
+                ElevatedButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.orange,
+                  ),
+                  child: const Text('Xác nhận - Tiếp tục'),
+                ),
+              ],
+            ),
+          );
+
+          if (shouldContinue != true) {
+            // User chose to cancel
+            return;
+          }
+          
+          // User confirmed, show processing dialog again
+          if (mounted) {
+            showDialog(
+              context: scaffoldContext,
+              barrierDismissible: false,
+              builder: (context) => const AlertDialog(
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircularProgressIndicator(),
+                    SizedBox(height: 16),
+                    Text('Vui lòng chờ xử lý dữ liệu.'),
+                  ],
+                ),
+              ),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Error validating return prices: $e');
+      // Non-blocking error, continue with ticket creation
     }
 
     if (!mounted) {
@@ -718,19 +705,14 @@ class _ReturnSummaryState extends State<ReturnSummary> {
     } catch (e) {
       if (mounted) {
         Navigator.pop(scaffoldContext); // Đóng dialog "Đang xử lý"
-        await showDialog(
+        
+        await ErrorHandler.showErrorDialog(
           context: scaffoldContext,
-          builder: (context) => AlertDialog(
-            title: const Text('Thông báo'),
-            content: Text('Lỗi tạo phiếu trả hàng: $e'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Đóng'),
-              ),
-            ],
-          ),
+          title: 'Lỗi tạo phiếu trả hàng',
+          error: e,
+          showRetry: false, // Không retry vì quá phức tạp
         );
+        
         debugPrint('Error creating ticket: $e');
       }
     }

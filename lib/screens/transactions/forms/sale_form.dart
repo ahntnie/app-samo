@@ -3,16 +3,21 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:intl/intl.dart';
 import 'sale_summary.dart';
+import '../../../helpers/cache_helper.dart';
 import 'dart:math' as math;
 import 'package:flutter/services.dart';
 import '../../text_scanner_screen.dart';
+import '../../../helpers/error_handler.dart';
 
 // Cache utility class
 class CacheUtil {
   static final Map<String, String> productNameCache = {};
+  static final Map<String, String> warehouseNameCache = {};
 
   static void cacheProductName(String id, String name) => productNameCache[id] = name;
   static String getProductName(String? id) => id != null ? productNameCache[id] ?? 'Không xác định' : 'Không xác định';
+  static void cacheWarehouseName(String id, String name) => warehouseNameCache[id] = name;
+  static String getWarehouseName(String? id) => id != null ? warehouseNameCache[id] ?? 'Không xác định' : 'Không xác định';
 }
 
 // Constants for IMEI handling
@@ -71,6 +76,7 @@ class _SaleFormState extends State<SaleForm> {
   List<String> imeiSuggestions = [];
   Map<String, String> productMap = {};
   Map<String, String> customerMap = {}; // Map id -> name
+  List<Map<String, dynamic>> warehouses = [];
   bool isLoading = true;
   String? errorMessage;
   String? imeiError;
@@ -163,11 +169,27 @@ class _SaleFormState extends State<SaleForm> {
           .toList()
         ..sort();
 
+      final warehouseResponse = await supabase.from('warehouses').select('id, name');
+      final warehouseList = warehouseResponse
+          .map((e) {
+            final id = e['id']?.toString();
+            final name = e['name'] as String?;
+            if (id != null && name != null) {
+              CacheUtil.cacheWarehouseName(id, name);
+              return {'id': id, 'name': name};
+            }
+            return null;
+          })
+          .whereType<Map<String, dynamic>>()
+          .toList()
+        ..sort((a, b) => (a['name'] as String).toLowerCase().compareTo((b['name'] as String).toLowerCase()));
+
       if (mounted) {
         setState(() {
           customers = customerList;
           currencies = uniqueCurrencies;
           salesmen = salesmanList;
+          warehouses = warehouseList;
           currency = uniqueCurrencies.contains('VND') ? 'VND' : uniqueCurrencies.isNotEmpty ? uniqueCurrencies.first : null;
           isLoading = false;
 
@@ -309,66 +331,152 @@ class _SaleFormState extends State<SaleForm> {
     }
 
     int quantity = 0;
+    String? selectedWarehouseId;
 
     await showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Tự động lấy IMEI'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'Số lượng sản phẩm bán'),
-              onChanged: (val) => quantity = int.tryParse(val) ?? 0,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Tự động lấy IMEI'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'Số lượng sản phẩm bán'),
+                onChanged: (val) => quantity = int.tryParse(val) ?? 0,
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                value: selectedWarehouseId,
+                items: warehouses.map((w) => DropdownMenuItem(
+                  value: w['id'] as String,
+                  child: Text(w['name'] as String),
+                )).toList(),
+                decoration: const InputDecoration(
+                  labelText: 'Kho bán hàng',
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (val) => setDialogState(() => selectedWarehouseId = val),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Hủy'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                Navigator.pop(context);
+                if (quantity > 0 && selectedWarehouseId != null) {
+                  await _fetchImeisForQuantity(quantity, selectedWarehouseId!);
+                }
+              },
+              child: const Text('Xác nhận'),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Hủy'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              Navigator.pop(context);
-              if (quantity > 0) {
-                await _fetchImeisForQuantity(quantity);
-              }
-            },
-            child: const Text('Xác nhận'),
-          ),
-        ],
       ),
     );
   }
 
-  Future<void> _fetchImeisForQuantity(int quantity) async {
+  Future<void> _fetchImeisForQuantity(int quantity, String warehouseId) async {
     if (productId == null || quantity <= 0) return;
 
     try {
       final supabase = widget.tenantClient;
+      
+      // ✅ FIX: Lấy nhiều hơn để lọc những cái đã có trong list
+      // Lấy gấp đôi để đảm bảo đủ sau khi lọc
+      final fetchQuantity = quantity * 2;
+      
       final response = await supabase
           .from('products')
-          .select('imei')
+          .select('imei, import_date')
           .eq('product_id', productId!)
           .eq('status', 'Tồn kho')
-          .limit(quantity);
+          .eq('warehouse_id', warehouseId)
+          .order('import_date', ascending: true)  // ✅ FIX: Lấy hàng cũ nhất trước (FIFO)
+          .limit(fetchQuantity);
 
       final imeiListFromDb = response
           .map((e) => e['imei'] as String?)
           .whereType<String>()
           .where((imei) => imei.trim().isNotEmpty && !imeiList.contains(imei))
-          .toList()
-        ..sort();
+          .take(quantity)  // ✅ FIX: Chỉ lấy đúng số lượng sau khi lọc
+          .toList();
 
-      if (mounted) {
-        setState(() {
-          imeiList = imeiListFromDb;
-        });
+      if (imeiListFromDb.length < quantity) {
+        // Check xem có tổng cộng bao nhiêu trong kho
+        final totalCountResponse = await supabase
+            .from('products')
+            .select('imei')
+            .eq('product_id', productId!)
+            .eq('status', 'Tồn kho')
+            .eq('warehouse_id', warehouseId)
+            .count(CountOption.exact);
+        
+        final totalCount = totalCountResponse.count;
+        
+        if (mounted) {
+          await showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Thông báo'),
+              content: Text(
+                'Số lượng sản phẩm tồn kho không đủ!\n\n'
+                'Cần: $quantity sản phẩm\n'
+                'Có trong kho: $totalCount sản phẩm\n'
+                'Chưa nhập: ${imeiList.length} sản phẩm\n'
+                'Có thể lấy thêm: ${imeiListFromDb.length} sản phẩm\n\n'
+                'Sản phẩm: "${CacheUtil.getProductName(productId)}"\n'
+                'Kho: "${CacheUtil.getWarehouseName(warehouseId)}"'
+              ),
+              actions: [
+                if (imeiListFromDb.isNotEmpty)
+                  TextButton(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      setState(() {
+                        imeiList.addAll(imeiListFromDb);
+                      });
+                    },
+                    child: Text('Lấy ${imeiListFromDb.length} sản phẩm'),
+                  ),
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Đóng'),
+                ),
+              ],
+            ),
+          );
+        }
+      } else {
+        // Đủ số lượng, thêm vào list
+        if (mounted) {
+          setState(() {
+            imeiList.addAll(imeiListFromDb);
+          });
+        }
       }
     } catch (e) {
       debugPrint('Error fetching IMEIs: $e');
+      if (mounted) {
+        await showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Lỗi'),
+            content: Text('Không thể tải IMEI: $e'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Đóng'),
+              ),
+            ],
+          ),
+        );
+      }
     }
   }
 
@@ -660,6 +768,9 @@ class _SaleFormState extends State<SaleForm> {
                   
                   final newCustomerId = insertResponse['id'].toString();
                   final newCustomerName = insertResponse['name'] as String;
+                  
+                  // ✅ Cache customer ngay sau khi tạo
+                  CacheHelper.cacheCustomer(newCustomerId, newCustomerName);
                   
                   if (mounted) {
                     setState(() {

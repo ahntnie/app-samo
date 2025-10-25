@@ -3,6 +3,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import '../../notification_service.dart';
+import '../../../helpers/error_handler.dart';
+import '../../../helpers/cache_helper.dart';
 
 class ThousandsFormatterLocal extends TextInputFormatter {
   @override
@@ -260,15 +262,36 @@ class _ReceiveFormState extends State<ReceiveForm> {
                         partnerData['type'] = transporterType ?? '';
                       }
 
-                      await widget.tenantClient.from(table).insert(partnerData);
+                      final insertResponse = await widget.tenantClient
+                          .from(table)
+                          .insert(partnerData)
+                          .select('id, name')
+                          .single();
+                      
+                      // ✅ Cache partner ngay sau khi tạo
+                      final newPartnerId = insertResponse['id'].toString();
+                      final newPartnerName = insertResponse['name'] as String;
+                      
+                      if (partnerType == 'Khách hàng') {
+                        CacheHelper.cacheCustomer(newPartnerId, newPartnerName);
+                      } else if (partnerType == 'Nhà cung cấp') {
+                        CacheHelper.cacheSupplier(newPartnerId, newPartnerName);
+                      } else if (partnerType == 'Đơn vị fix lỗi') {
+                        CacheHelper.cacheFixer(newPartnerId, newPartnerName);
+                      }
+                      // Note: Đơn vị vận chuyển không cần cache
+                      
                       await loadPartnerNames(partnerType!);
                       if (mounted) {
                         setState(() => partnerName = name);
                       }
                       Navigator.pop(context);
                     } catch (e) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('Lỗi khi thêm đối tác: $e')),
+                      await ErrorHandler.showErrorDialog(
+                        context: context,
+                        title: 'Lỗi thêm đối tác',
+                        error: e,
+                        showRetry: false,
                       );
                     }
                   } else {
@@ -484,8 +507,11 @@ class _ReceiveFormState extends State<ReceiveForm> {
 
                     Navigator.pop(context);
                   } catch (e) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Lỗi khi tạo phiếu thu: $e')),
+                    await ErrorHandler.showErrorDialog(
+                      context: context,
+                      title: 'Lỗi tạo phiếu thu',
+                      error: e,
+                      showRetry: false,
                     );
                   }
                 },

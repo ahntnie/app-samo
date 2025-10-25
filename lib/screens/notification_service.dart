@@ -162,14 +162,12 @@ class NotificationService {
   }) async {
     try {
       print('Sending notification to all devices: $title - $body');
-
+      
       if (_tenantUrl == null || _tenantAnonKey == null) {
-        print(
-          'Error: Tenant credentials not set. Call NotificationService.init() first.',
-        );
+        print('Error: Tenant credentials not set. Call NotificationService.init() first.');
         return;
       }
-
+      
       // Gọi Edge Function từ main Supabase project (không phải tenant)
       final mainClient = Supabase.instance.client;
       final response = await mainClient.functions.invoke(
@@ -187,9 +185,7 @@ class NotificationService {
         final result = response.data;
         print('Notification sent successfully: ${jsonEncode(result)}');
       } else {
-        print(
-          'Error sending notification: ${response.status} - ${response.data}',
-        );
+        print('Error sending notification: ${response.status} - ${response.data}');
       }
     } catch (e) {
       print('Exception sending notification to all devices: $e');
@@ -234,7 +230,7 @@ class NotificationService {
             badge: true,
             sound: true,
           );
-
+          
       const AndroidNotificationDetails androidPlatformChannelSpecifics =
           AndroidNotificationDetails(
             'high_importance_channel',
@@ -294,8 +290,6 @@ class NotificationService {
     Function callback,
   ) async {
     await _flutterLocalNotificationsPlugin.zonedSchedule(
-      uiLocalNotificationDateInterpretation:
-          UILocalNotificationDateInterpretation.absoluteTime,
       id,
       title,
       body,

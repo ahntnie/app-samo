@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'dart:math';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'text_scanner_screen.dart';
+import '../helpers/cache_helper.dart';
 
 class ThousandsFormatterLocal extends TextInputFormatter {
   @override
@@ -667,7 +668,20 @@ class _InitialDataScreenState extends State<InitialDataScreen> with SingleTicker
                     };
                   }
 
-                  await widget.tenantClient.from(table).insert(insertData);
+                  final insertResponse = await widget.tenantClient.from(table).insert(insertData).select('id, name').single();
+                  
+                  final newPartnerId = insertResponse['id'].toString();
+                  final newPartnerName = insertResponse['name'] as String;
+                  
+                  // ✅ Cache partner ngay sau khi tạo
+                  if (selectedPartnerType == 'customer') {
+                    CacheHelper.cacheCustomer(newPartnerId, newPartnerName);
+                  } else if (selectedPartnerType == 'supplier') {
+                    CacheHelper.cacheSupplier(newPartnerId, newPartnerName);
+                  } else if (selectedPartnerType == 'fixer') {
+                    CacheHelper.cacheFixer(newPartnerId, newPartnerName);
+                  }
+                  // Note: Transporter không cần cache (không dùng trong autocomplete)
 
                   setState(() {
                     partnerNames.add(name);
@@ -1051,7 +1065,7 @@ class _InitialDataScreenState extends State<InitialDataScreen> with SingleTicker
                     .maybeSingle();
 
                 if (existingPartner == null) {
-                  await widget.tenantClient.from(table).insert(
+                  final insertResponse = await widget.tenantClient.from(table).insert(
                         selectedPartnerType == 'transporter'
                             ? {'name': partnerName, 'debt': 0}
                             : {
@@ -1060,7 +1074,19 @@ class _InitialDataScreenState extends State<InitialDataScreen> with SingleTicker
                                 'debt_cny': 0,
                                 'debt_usd': 0,
                               },
-                      );
+                      ).select('id, name').single();
+                  
+                  // ✅ Cache partner ngay sau khi tạo
+                  final newPartnerId = insertResponse['id'].toString();
+                  final newPartnerName = insertResponse['name'] as String;
+                  
+                  if (selectedPartnerType == 'customer') {
+                    CacheHelper.cacheCustomer(newPartnerId, newPartnerName);
+                  } else if (selectedPartnerType == 'supplier') {
+                    CacheHelper.cacheSupplier(newPartnerId, newPartnerName);
+                  } else if (selectedPartnerType == 'fixer') {
+                    CacheHelper.cacheFixer(newPartnerId, newPartnerName);
+                  }
                 }
 
                 final debtColumn = selectedPartnerType == 'transporter'

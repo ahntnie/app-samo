@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import '../../notification_service.dart';
+import '../../../helpers/error_handler.dart';
 
 class ThousandsFormatterLocal extends TextInputFormatter {
   @override
@@ -207,8 +208,11 @@ class _IncomeOtherFormState extends State<IncomeOtherForm> {
                 }
               } catch (e) {
                 if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Lỗi khi tạo phiếu thu nhập khác: $e')),
+                  await ErrorHandler.showErrorDialog(
+                    context: context,
+                    title: 'Lỗi tạo phiếu thu nhập khác',
+                    error: e,
+                    showRetry: false,
                   );
                 }
               }

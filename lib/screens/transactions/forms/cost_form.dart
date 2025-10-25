@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import '../../notification_service.dart';
+import '../../../helpers/error_handler.dart';
 
 class ThousandsFormatterLocal extends TextInputFormatter {
   @override
@@ -231,10 +232,11 @@ class _CostFormState extends State<CostForm> {
                     }
                   } catch (e) {
                     if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('Lỗi khi tạo phiếu chi phí: $e'),
-                        ),
+                      await ErrorHandler.showErrorDialog(
+                        context: context,
+                        title: 'Lỗi tạo phiếu chi phí',
+                        error: e,
+                        showRetry: false,
                       );
                     }
                   }

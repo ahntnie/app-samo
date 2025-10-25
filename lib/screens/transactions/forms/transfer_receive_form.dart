@@ -8,6 +8,7 @@ import 'dart:math' as math;
 import 'dart:developer' as developer;
 import '../../notification_service.dart';
 import '../../text_scanner_screen.dart';
+import '../../../helpers/error_handler.dart';
 
 class ThousandsFormatterLocal extends TextInputFormatter {
   @override
@@ -50,7 +51,6 @@ class _TransferReceiveFormState extends State<TransferReceiveForm> {
   String? imei = '';
   String? note;
   String? transportFee;
-  int quantity = 0;
   Map<String, String> warehouseMap = {};
   Map<String, String> productMap = {};
   List<String> imeiSuggestions = [];
@@ -62,7 +62,6 @@ class _TransferReceiveFormState extends State<TransferReceiveForm> {
 
   final TextEditingController imeiController = TextEditingController();
   final TextEditingController feeController = TextEditingController();
-  final TextEditingController quantityController = TextEditingController();
   final TextEditingController productController = TextEditingController();
   final TextEditingController warehouseController = TextEditingController();
   final FocusNode imeiFocusNode = FocusNode();
@@ -73,14 +72,12 @@ class _TransferReceiveFormState extends State<TransferReceiveForm> {
     _loadInitialData();
     imeiController.text = imei ?? '';
     feeController.text = transportFee ?? '';
-    quantityController.text = quantity.toString();
   }
 
   @override
   void dispose() {
     imeiController.dispose();
     feeController.dispose();
-    quantityController.dispose();
     productController.dispose();
     warehouseController.dispose();
     imeiFocusNode.dispose();
@@ -428,31 +425,283 @@ class _TransferReceiveFormState extends State<TransferReceiveForm> {
     }
   }
 
-  Future<List<String>> _generateRandomImeis(int quantity, String productId) async {
-    final stopwatch = Stopwatch()..start();
+  // Show Auto IMEI dialog
+  Future<void> _showAutoImeiDialog() async {
+    if (productId == null) {
+      await showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Thông báo'),
+          content: const Text('Vui lòng chọn sản phẩm trước!'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Đóng'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
+    int? quantity;
+    String? selectedOriginWarehouseId;
+    final TextEditingController quantityController = TextEditingController();
+    final TextEditingController originWarehouseController = TextEditingController();
+
+    await showDialog(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setStateDialog) => AlertDialog(
+          title: const Text('Auto IMEI'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextFormField(
+                  controller: quantityController,
+                  keyboardType: TextInputType.number,
+                  onChanged: (val) {
+                    quantity = int.tryParse(val);
+                  },
+                  decoration: const InputDecoration(
+                    labelText: 'Số lượng',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Autocomplete<Map<String, dynamic>>(
+                  optionsBuilder: (TextEditingValue textEditingValue) {
+                    final query = textEditingValue.text.toLowerCase();
+                    final warehouseList = warehouseMap.entries
+                        .map((e) => {'id': e.key, 'name': e.value})
+                        .toList();
+                    if (query.isEmpty) return warehouseList.take(10).toList();
+                    final filtered = warehouseList
+                        .where((option) => (option['name'] as String).toLowerCase().contains(query))
+                        .toList()
+                      ..sort((a, b) => (a['name'] as String).toLowerCase().compareTo((b['name'] as String).toLowerCase()));
+                    return filtered.isNotEmpty ? filtered.take(10).toList() : [{'id': '', 'name': 'Không tìm thấy kho'}];
+                  },
+                  displayStringForOption: (option) => option['name'] as String,
+                  onSelected: (val) {
+                    if (val['id'].isEmpty) return;
+                    setStateDialog(() {
+                      selectedOriginWarehouseId = val['id'] as String;
+                      originWarehouseController.text = val['name'] as String;
+                    });
+                  },
+                  fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
+                    controller.text = originWarehouseController.text;
+                    return TextFormField(
+                      controller: controller,
+                      focusNode: focusNode,
+                      onChanged: (value) {
+                        originWarehouseController.text = value;
+                      },
+                      decoration: const InputDecoration(
+                        labelText: 'Kho gửi',
+                        border: OutlineInputBorder(),
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Hủy'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                if (quantity == null || quantity! <= 0) {
+                  showDialog(
+                    context: dialogContext,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text('Thông báo'),
+                      content: const Text('Vui lòng nhập số lượng hợp lệ!'),
+                      actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Đóng'))],
+                    ),
+                  );
+                  return;
+                }
+                if (selectedOriginWarehouseId == null || selectedOriginWarehouseId!.trim().isEmpty) {
+                  showDialog(
+                    context: dialogContext,
+                    builder: (ctx) => AlertDialog(
+                      title: const Text('Thông báo'),
+                      content: const Text('Vui lòng chọn kho gửi!'),
+                      actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Đóng'))],
+                    ),
+                  );
+                  return;
+                }
+                Navigator.pop(dialogContext);
+                await _autoFetchImeis(quantity!, selectedOriginWarehouseId!);
+              },
+              child: const Text('Tìm'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // Auto fetch IMEIs based on quantity and origin warehouse
+  Future<void> _autoFetchImeis(int qty, String originWarehouseId) async {
+    setState(() {
+      isLoading = true;
+    });
+
     try {
-      final response = await widget.tenantClient
-          .from('products')
-          .select('imei')
-          .eq('status', 'đang vận chuyển')
-          .eq('product_id', productId);
+      final supabase = widget.tenantClient;
+      
+      // Tìm phiếu chuyển kho gần nhất từ kho gửi này với sản phẩm này
+      final latestTransferOrder = await supabase
+          .from('transporter_orders')
+          .select('id, imei')
+          .eq('product_id', productId!)
+          .eq('warehouse_id', originWarehouseId)
+          .or('type.eq.chuyển kho quốc tế,type.eq.chuyển kho nội địa')
+          .order('created_at', ascending: false)
+          .limit(1)
+          .maybeSingle();
 
-      final availableImeis = response
-          .map((e) => e['imei'] as String)
-          .toList()
-        ..shuffle();
-
-      if (availableImeis.length < quantity) {
-        throw Exception('Không đủ sản phẩm đang vận chuyển để tạo phiếu với số lượng $quantity');
+      if (latestTransferOrder == null) {
+        if (mounted) {
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Thông báo'),
+              content: Text('Không tìm thấy phiếu chuyển kho nào cho sản phẩm "${productMap[productId]}" từ kho "${warehouseMap[originWarehouseId]}".'),
+              actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Đóng'))],
+            ),
+          );
+        }
+        setState(() {
+          isLoading = false;
+        });
+        return;
       }
 
-      final result = availableImeis.take(quantity).toList();
-      developer.log('Tạo danh sách IMEI ngẫu nhiên ($quantity), thời gian: ${stopwatch.elapsedMilliseconds}ms');
-      stopwatch.stop();
-      return result;
+      // Lấy danh sách IMEI từ phiếu chuyển kho
+      final imeiString = latestTransferOrder['imei'] as String?;
+      if (imeiString == null || imeiString.isEmpty) {
+        if (mounted) {
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Thông báo'),
+              content: const Text('Phiếu chuyển kho không có IMEI nào.'),
+              actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Đóng'))],
+            ),
+          );
+        }
+        setState(() {
+          isLoading = false;
+        });
+        return;
+      }
+
+      final transferImeis = imeiString.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+      
+      // ✅ FIX: Lấy nhiều hơn để đảm bảo đủ sau khi lọc duplicate
+      final fetchQuantity = qty * 2;
+      
+      // Lọc IMEI còn đang vận chuyển
+      final response = await supabase
+          .from('products')
+          .select('imei, import_date')
+          .eq('product_id', productId!)
+          .eq('status', 'đang vận chuyển')
+          .inFilter('imei', transferImeis)
+          .order('import_date', ascending: true)  // ✅ FIX: FIFO
+          .limit(fetchQuantity);
+
+      final fetchedImeis = response
+          .map((e) => e['imei'] as String?)
+          .whereType<String>()
+          .where((imei) => imei != null && imei.trim().isNotEmpty && !imeiList.contains(imei))
+          .cast<String>()
+          .take(qty)  // ✅ FIX: Chỉ lấy đúng số lượng sau khi lọc
+          .toList();
+
+      if (fetchedImeis.length < qty) {
+        // Check tổng số lượng đang vận chuyển từ kho này
+        final totalCountResponse = await supabase
+            .from('products')
+            .select('imei')
+            .eq('product_id', productId!)
+            .eq('status', 'đang vận chuyển')
+            .inFilter('imei', transferImeis)
+            .count(CountOption.exact);
+        
+        final totalCount = totalCountResponse.count;
+        
+        if (mounted) {
+          await showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Thông báo'),
+              content: Text(
+                'Số lượng sản phẩm không đủ!\n\n'
+                'Cần: $qty sản phẩm\n'
+                'Đang vận chuyển từ kho "${warehouseMap[originWarehouseId]}": $totalCount sản phẩm\n'
+                'Đã nhập: ${imeiList.length} sản phẩm\n'
+                'Có thể lấy thêm: ${fetchedImeis.length} sản phẩm\n\n'
+                'Sản phẩm: "${productMap[productId]}"'
+              ),
+              actions: [
+                if (fetchedImeis.isNotEmpty)
+                  TextButton(
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      setState(() {
+                        imeiList.addAll(fetchedImeis);
+                        isLoading = false;
+                      });
+                    },
+                    child: Text('Lấy ${fetchedImeis.length} sản phẩm'),
+                  ),
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    setState(() {
+                      isLoading = false;
+                    });
+                  },
+                  child: const Text('Đóng'),
+                ),
+              ],
+            ),
+          );
+        }
+        setState(() {
+          isLoading = false;
+        });
+        return;
+      }
+
+      setState(() {
+        imeiList.addAll(fetchedImeis);
+        isLoading = false;
+      });
     } catch (e) {
-      developer.log('Lỗi khi tạo danh sách IMEI ngẫu nhiên: $e', level: 1000);
-      throw Exception('Lỗi khi tạo danh sách IMEI: $e');
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Lỗi'),
+            content: Text('Không thể tải IMEI: $e'),
+            actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Đóng'))],
+          ),
+        );
+      }
+      setState(() {
+        isLoading = false;
+      });
     }
   }
 
@@ -495,48 +744,10 @@ class _TransferReceiveFormState extends State<TransferReceiveForm> {
           errors.add('Lỗi khi tính cước vận chuyển: $e');
         }
       }
-    } else {
-      final enteredQuantity = int.tryParse(quantityController.text) ?? 0;
-      final enteredFee = double.tryParse(feeController.text.replaceAll('.', '')) ?? 0;
-
-      if (enteredQuantity <= 0) {
-        errors.add('Vui lòng nhập số lượng lớn hơn 0!');
-      }
-
-      if (enteredFee <= 0) {
-        errors.add('Vui lòng nhập cước vận chuyển lớn hơn 0!');
-      }
-
-      if (enteredFee < 0) {
-        errors.add('Cước vận chuyển không được âm!');
-      }
-
-      if (errors.isEmpty && productId != null) {
-        // Sử dụng IMEI đã tự động lấy từ imeiList nếu có
-        if (imeiList.isNotEmpty && imeiList.length == enteredQuantity) {
-          imeis = List.from(imeiList);
-          transportFeeValue = enteredFee;
-          feesPerProduct = { for (var imei in imeis) imei: transportFeeValue / imeis.length };
-        } else {
-          // Nếu chưa có IMEI hoặc số lượng không khớp, tạo mới
-          try {
-            imeis = await _generateRandomImeis(enteredQuantity, productId!);
-            transportFeeValue = enteredFee;
-            feesPerProduct = { for (var imei in imeis) imei: transportFeeValue / imeis.length };
-          } catch (e) {
-            errors.add('$e');
-            imeis = [];
-            transportFeeValue = 0;
-          }
-        }
-      } else {
-        imeis = [];
-        transportFeeValue = 0;
-      }
     }
 
     if (imeis.isEmpty) {
-      errors.add('Vui lòng nhập ít nhất 1 IMEI hoặc chọn số lượng để tạo phiếu nhập kho');
+      errors.add('Vui lòng sử dụng Auto IMEI để lấy IMEI tự động!');
     }
 
     if (imeis.length > maxImeiQuantity) {
@@ -926,8 +1137,36 @@ class _TransferReceiveFormState extends State<TransferReceiveForm> {
         );
 
         if (mounted) {
+          // Close loading dialog first
           Navigator.pop(context);
-          Navigator.pop(context);
+          
+          // Reset all fields
+          setState(() {
+            warehouseId = null;
+            productId = null;
+            imei = '';
+            note = null;
+            transportFee = null;
+            imeiList = [];
+            imeiError = null;
+            feeError = null;
+            isSubmitting = false;
+          });
+          
+          // Clear controllers
+          imeiController.clear();
+          feeController.clear();
+          productController.clear();
+          warehouseController.clear();
+          
+          // Show success message
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Đã tạo phiếu nhập kho vận chuyển thành công!'),
+              backgroundColor: Colors.green,
+              duration: Duration(seconds: 2),
+            ),
+          );
         }
 
       } catch (e) {
@@ -991,8 +1230,6 @@ class _TransferReceiveFormState extends State<TransferReceiveForm> {
         body: Center(child: CircularProgressIndicator()),
       );
     }
-
-    final isImeiManual = imeiList.isNotEmpty;
 
     return Scaffold(
       resizeToAvoidBottomInset: true,
@@ -1124,77 +1361,40 @@ class _TransferReceiveFormState extends State<TransferReceiveForm> {
                 },
               ),
             ),
-            wrapField(
-              Row(
-                children: [
-                  Expanded(
-                    child: TextFormField(
-                      controller: quantityController,
-                      keyboardType: TextInputType.number,
-                      enabled: !isImeiManual,
-                      onChanged: (val) {
-                        setState(() {
-                          quantity = int.tryParse(val) ?? 0;
-                        });
-                      },
-                      decoration: const InputDecoration(
-                        labelText: 'Số lượng',
-                        border: InputBorder.none,
-                        isDense: true,
-                      ),
+            Stack(
+              children: [
+                // Ô sản phẩm chiếm toàn bộ chiều ngang (nhưng đã có ở trên rồi, chỉ cần thêm nút Auto IMEI)
+                wrapField(
+                  Container(
+                    height: 48,
+                    alignment: Alignment.centerLeft,
+                    child: const Text(
+                      'IMEI (Bấm Auto IMEI để lấy tự động)',
+                      style: TextStyle(fontSize: 14, color: Colors.black54),
                     ),
                   ),
-                  if (!isImeiManual)
-                    IconButton(
-                      icon: const Icon(Icons.search, color: Colors.blue),
-                      onPressed: () async {
-                        if (productId == null) {
-                          _showErrorSnackBar('Vui lòng chọn sản phẩm trước!');
-                          return;
-                        }
-                        
-                        if (quantity <= 0) {
-                          _showErrorSnackBar('Vui lòng nhập số lượng hợp lệ!');
-                          return;
-                        }
-                        
-                        final confirmed = await showDialog<bool>(
-                          context: context,
-                          builder: (context) => AlertDialog(
-                            title: const Text('Xác nhận'),
-                            content: Text('Tự động lấy $quantity IMEI từ kho?'),
-                            actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(context, false),
-                                child: const Text('Hủy'),
-                              ),
-                              ElevatedButton(
-                                onPressed: () => Navigator.pop(context, true),
-                                child: const Text('Xác nhận'),
-                              ),
-                            ],
-                          ),
-                        );
-                        
-                        if (confirmed == true) {
-                          try {
-                            final autoImeis = await _generateRandomImeis(quantity, productId!);
-                            setState(() {
-                              imeiList = autoImeis;
-                            });
-                          } catch (e) {
-                            setState(() {
-                              imeiList = [];
-                            });
-                            _showErrorSnackBar('$e');
-                          }
-                        }
-                      },
-                      padding: EdgeInsets.zero,
-                      constraints: const BoxConstraints(),
+                ),
+                // Nút Auto IMEI nằm đè lên góc phải
+                Positioned(
+                  right: 8,
+                  top: 0,
+                  bottom: 0,
+                  child: Center(
+                    child: ElevatedButton(
+                      onPressed: productId != null ? _showAutoImeiDialog : null,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blue,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                      ),
+                      child: const Text('Auto IMEI', style: TextStyle(fontSize: 12)),
                     ),
-                ],
-              ),
+                  ),
+                ),
+              ],
             ),
             wrapField(
               Column(

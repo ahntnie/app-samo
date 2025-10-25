@@ -3,6 +3,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import '../../notification_service.dart';
+import '../../../helpers/error_handler.dart';
+import '../../../helpers/cache_helper.dart';
 
 class ThousandsFormatterLocal extends TextInputFormatter {
   @override
@@ -257,15 +259,34 @@ class _PaymentFormState extends State<PaymentForm> {
                         partnerData['type'] = transporterType;
                       }
 
-                      await widget.tenantClient
+                      final insertResponse = await widget.tenantClient
                           .from(partnerType)
-                          .insert(partnerData);
+                          .insert(partnerData)
+                          .select('id, name')
+                          .single();
+                      
+                      // ✅ Cache partner ngay sau khi tạo
+                      final newPartnerId = insertResponse['id'].toString();
+                      final newPartnerName = insertResponse['name'] as String;
+                      
+                      if (partnerType == 'customers') {
+                        CacheHelper.cacheCustomer(newPartnerId, newPartnerName);
+                      } else if (partnerType == 'suppliers') {
+                        CacheHelper.cacheSupplier(newPartnerId, newPartnerName);
+                      } else if (partnerType == 'fix_units') {
+                        CacheHelper.cacheFixer(newPartnerId, newPartnerName);
+                      }
+                      // Note: Transporter không cần cache
+                      
                       await loadPartners();
                       setState(() => partnerName = name);
                       Navigator.pop(context);
                     } catch (e) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('Lỗi khi thêm đối tác: $e')),
+                      await ErrorHandler.showErrorDialog(
+                        context: context,
+                        title: 'Lỗi thêm đối tác',
+                        error: e,
+                        showRetry: false,
                       );
                     }
                   } else {
@@ -528,19 +549,11 @@ class _PaymentFormState extends State<PaymentForm> {
                   } catch (e) {
                     if (mounted) {
                       Navigator.pop(context);
-                      await showDialog(
+                      await ErrorHandler.showErrorDialog(
                         context: context,
-                        builder:
-                            (context) => AlertDialog(
-                              title: const Text('Lỗi'),
-                              content: Text('Lỗi khi tạo phiếu chi: $e'),
-                              actions: [
-                                TextButton(
-                                  onPressed: () => Navigator.pop(context),
-                                  child: const Text('Đóng'),
-                                ),
-                              ],
-                            ),
+                        title: 'Lỗi tạo phiếu chi',
+                        error: e,
+                        showRetry: false,
                       );
                     }
                   }

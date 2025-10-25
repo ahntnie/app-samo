@@ -6,6 +6,8 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import '../../notification_service.dart';
 import '../../text_scanner_screen.dart';
+import '../../../helpers/error_handler.dart';
+import '../../../helpers/cache_helper.dart';
 
 // Cache utility class
 class CacheUtil {
@@ -681,6 +683,9 @@ class _ImportFormState extends State<ImportForm> {
                   'id': response['id'] as int,
                   'name': response['name'] as String,
                 };
+                
+                // Note: Categories không cần GlobalCache vì không có autocomplete ở form khác
+                // Chỉ cache local trong form này là đủ
 
                 setState(() {
                   categories.add(newCategory);
@@ -754,7 +759,12 @@ class _ImportFormState extends State<ImportForm> {
                   operation: 'Add supplier',
                 );
                 final newSupplierId = response['id']?.toString();
+                final newSupplierName = response['name'] as String;
+                
+                // ✅ Cache supplier ngay sau khi tạo
                 if (newSupplierId != null) {
+                  CacheHelper.cacheSupplier(newSupplierId, newSupplierName);
+                  
                   setState(() {
                     suppliers.add({'id': newSupplierId, 'name': name});
                     suppliers.sort((a, b) => (a['name'] as String).compareTo(b['name'] as String));
@@ -844,7 +854,10 @@ class _ImportFormState extends State<ImportForm> {
                 );
                 final newProductId = response['id']?.toString();
                 if (newProductId != null) {
+                  // ✅ Cache product vào cả local và global cache
                   CacheUtil.cacheProductName(newProductId, name);
+                  CacheHelper.cacheProduct(newProductId, name);
+                  
                   setState(() {
                     products.add({'id': newProductId, 'name': name});
                     products.sort((a, b) => (a['name'] as String).toLowerCase().compareTo((b['name'] as String).toLowerCase()));
@@ -949,7 +962,10 @@ class _ImportFormState extends State<ImportForm> {
                 );
                 final newWarehouseId = response['id']?.toString();
                 if (newWarehouseId != null) {
+                  // ✅ Cache warehouse vào cả local và global cache
                   CacheUtil.cacheWarehouseName(newWarehouseId, name);
+                  CacheHelper.cacheWarehouse(newWarehouseId, name);
+                  
                   setState(() {
                     warehouses.add({'id': newWarehouseId, 'name': response['name'], 'type': type});
                     warehouses.sort((a, b) => (a['name'] as String).toLowerCase().compareTo((b['name'] as String).toLowerCase()));
@@ -1352,42 +1368,57 @@ class _ImportFormState extends State<ImportForm> {
                   );
 
                   if (mounted) {
+                    // Reset all fields
                     setState(() {
+                      categoryId = null;
+                      categoryName = null;
+                      supplier = null;
+                      supplierId = null;
+                      productId = null;
+                      productName = null;
+                      imei = '';
+                      price = null;
+                      currency = null;
+                      account = null;
+                      note = null;
+                      warehouseId = null;
+                      warehouseName = null;
+                      isAccessory = false;
+                      imeiError = null;
                       isProcessing = false;
+                      accountNames = [];
                     });
+                    
+                    // Clear controllers
+                    imeiController.clear();
+                    priceController.clear();
+                    confirmedImeis.clear();
+                    
+                    // Show success message
                     ScaffoldMessenger.of(scaffoldContext).showSnackBar(
                       SnackBar(
                         content: Text(
                           'Đã nhập hàng "${CacheUtil.getProductName(currentProductId)}" số lượng ${formatNumberLocal(currentImeiListLength)} chiếc',
                           style: const TextStyle(color: Colors.white),
                         ),
-                        backgroundColor: Colors.black,
+                        backgroundColor: Colors.green,
                         behavior: SnackBarBehavior.floating,
                         margin: const EdgeInsets.all(8),
-                        duration: const Duration(seconds: 3),
+                        duration: const Duration(seconds: 2),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                       ),
                     );
-                    Navigator.pop(context);
-                    Navigator.pop(context);
                   }
                 } catch (e) {
                   setState(() {
                     isProcessing = false;
                   });
                   if (mounted) {
-                    await showDialog(
+                    await ErrorHandler.showErrorDialog(
                       context: scaffoldContext,
-                      builder: (context) => AlertDialog(
-                        title: const Text('Thông báo'),
-                        content: Text('Lỗi khi tạo phiếu: $e'),
-                        actions: [
-                          TextButton(
-                            onPressed: () => Navigator.pop(context),
-                            child: const Text('Đóng'),
-                          ),
-                        ],
-                      ),
+                      title: 'Lỗi tạo phiếu nhập hàng',
+                      error: e,
+                      showRetry: false,
                     );
                   }
                 }
@@ -1636,6 +1667,41 @@ class _ImportFormState extends State<ImportForm> {
               wrapField(
                 Column(
                   children: [
+                    // ✅ FIX: Hiển thị số lượng IMEI đã nhập
+                    if (imei != null && imei!.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8.0),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              'Đã nhập ${imei!.split('\n').where((e) => e.trim().isNotEmpty).length} IMEI',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                                color: Colors.blue,
+                              ),
+                            ),
+                            TextButton.icon(
+                              onPressed: () {
+                                setState(() {
+                                  imei = '';
+                                  imeiController.clear();
+                                  imeiError = null;
+                                });
+                              },
+                              icon: const Icon(Icons.clear_all, size: 16),
+                              label: const Text('Xóa tất cả', style: TextStyle(fontSize: 12)),
+                              style: TextButton.styleFrom(
+                                foregroundColor: Colors.red,
+                                padding: EdgeInsets.zero,
+                                minimumSize: const Size(0, 0),
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     // Phần nhập IMEI
                     Expanded(
                       child: TextFormField(
@@ -1656,10 +1722,11 @@ class _ImportFormState extends State<ImportForm> {
                           }
                         },
                         decoration: InputDecoration(
-                          labelText: 'Nhập imei hoặc quét QR (mỗi dòng 1)',
+                          labelText: 'Nhập IMEI hoặc quét QR (mỗi dòng 1)',
                           border: InputBorder.none,
                           isDense: true,
                           errorText: imeiError,
+                          floatingLabelBehavior: FloatingLabelBehavior.never, // ✅ Label biến mất khi focus
                         ),
                       ),
                     ),

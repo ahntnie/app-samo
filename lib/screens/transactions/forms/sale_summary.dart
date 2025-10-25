@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import '../../notification_service.dart';
 import 'sale_form.dart';
 import 'dart:math' as math;
+import '../../../../helpers/error_handler.dart';
 
 // Constants for batch processing
 const int maxBatchSize = 1000;
@@ -870,18 +871,12 @@ class _SaleSummaryState extends State<SaleSummary> {
         setState(() {
           isProcessing = false;
         });
-        await showDialog(
+        
+        await ErrorHandler.showErrorDialog(
           context: scaffoldContext,
-          builder: (context) => AlertDialog(
-            title: const Text('Thông báo'),
-            content: Text('Lỗi khi tạo phiếu bán hàng: $e'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Đóng'),
-              ),
-            ],
-          ),
+          title: 'Lỗi tạo phiếu bán hàng',
+          error: e,
+          showRetry: false, // Không retry vì quá phức tạp
         );
       }
     }

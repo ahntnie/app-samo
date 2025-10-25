@@ -8,6 +8,7 @@ import 'dart:developer' as developer;
 import '../../notification_service.dart';
 import 'package:flutter/services.dart';
 import '../../text_scanner_screen.dart';
+import '../../../helpers/error_handler.dart';
 
 // Utility class for caching product names
 class CacheUtil {
@@ -370,6 +371,7 @@ class _TransferGlobalFormState extends State<TransferGlobalForm> {
   Future<void> _showAutoImeiDialog() async {
     int? localQuantity;
     String? localWarehouseId;
+    String? selectedWarehouseId;
     final TextEditingController localQuantityController = TextEditingController();
     final TextEditingController localWarehouseController = TextEditingController();
 
@@ -407,6 +409,7 @@ class _TransferGlobalFormState extends State<TransferGlobalForm> {
                 onSelected: (val) {
                   if (val['id'].isEmpty) return;
                   localWarehouseId = val['id'] as String;
+                  selectedWarehouseId = val['id'] as String;
                   localWarehouseController.text = val['name'] as String;
                 },
                 fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
@@ -457,7 +460,7 @@ class _TransferGlobalFormState extends State<TransferGlobalForm> {
                 return;
               }
               Navigator.pop(dialogContext);
-              await _autoFetchImeis(localQuantity!, localWarehouseId!);
+              await _autoFetchImeis(localQuantity!, selectedWarehouseId!);
             },
             child: const Text('Tìm'),
           ),
@@ -474,29 +477,75 @@ class _TransferGlobalFormState extends State<TransferGlobalForm> {
 
     try {
       final supabase = widget.tenantClient;
+      
+      // ✅ FIX: Lấy gấp đôi để đảm bảo đủ sau khi lọc duplicate
+      final fetchQuantity = qty * 2;
+      
       final response = await supabase
           .from('products')
-          .select('imei')
+          .select('imei, import_date')
           .eq('product_id', productId!)
           .eq('warehouse_id', warehouseId)
           .eq('status', 'Tồn kho')
-          .order('import_date', ascending: true)
-          .limit(qty);
+          .order('import_date', ascending: true)  // FIFO - Lấy hàng cũ nhất trước
+          .limit(fetchQuantity);
 
       final fetchedImeis = response
           .map((e) => e['imei'] as String?)
           .whereType<String>()
-          .where((imei) => !imeiList.contains(imei))
+          .where((imei) => imei != null && imei.trim().isNotEmpty && !imeiList.contains(imei))
+          .cast<String>()
+          .take(qty)  // ✅ FIX: Chỉ lấy đúng số lượng sau khi lọc
           .toList();
 
       if (fetchedImeis.length < qty) {
+        // Check tổng số lượng có trong kho
+        final totalCountResponse = await supabase
+            .from('products')
+            .select('imei')
+            .eq('product_id', productId!)
+            .eq('warehouse_id', warehouseId)
+            .eq('status', 'Tồn kho')
+            .count(CountOption.exact);
+        
+        final totalCount = totalCountResponse.count;
+        
         if (mounted) {
-          showDialog(
+          await showDialog(
             context: context,
             builder: (ctx) => AlertDialog(
               title: const Text('Thông báo'),
-              content: Text('Kho ${CacheUtil.getWarehouseName(warehouseId)} chỉ có ${fetchedImeis.length} sản phẩm "${CacheUtil.getProductName(productId)}" ở trạng thái Tồn kho. Không đủ số lượng $qty.'),
-              actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Đóng'))],
+              content: Text(
+                'Số lượng sản phẩm tồn kho không đủ!\n\n'
+                'Cần: $qty sản phẩm\n'
+                'Có trong kho: $totalCount sản phẩm\n'
+                'Đã nhập: ${imeiList.length} sản phẩm\n'
+                'Có thể lấy thêm: ${fetchedImeis.length} sản phẩm\n\n'
+                'Sản phẩm: "${CacheUtil.getProductName(productId)}"\n'
+                'Kho: "${CacheUtil.getWarehouseName(warehouseId)}"'
+              ),
+              actions: [
+                if (fetchedImeis.isNotEmpty)
+                  TextButton(
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      setState(() {
+                        imeiList.addAll(fetchedImeis);
+                        isLoading = false;
+                      });
+                    },
+                    child: Text('Lấy ${fetchedImeis.length} sản phẩm'),
+                  ),
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    setState(() {
+                      isLoading = false;
+                    });
+                  },
+                  child: const Text('Đóng'),
+                ),
+              ],
             ),
           );
         }
@@ -507,7 +556,7 @@ class _TransferGlobalFormState extends State<TransferGlobalForm> {
       }
 
       setState(() {
-        imeiList = fetchedImeis;
+        imeiList.addAll(fetchedImeis);
         isLoading = false;
       });
     } catch (e) {
@@ -516,7 +565,7 @@ class _TransferGlobalFormState extends State<TransferGlobalForm> {
           context: context,
           builder: (ctx) => AlertDialog(
             title: const Text('Lỗi'),
-            content: Text('$e'),
+            content: Text('Không thể tải IMEI: $e'),
             actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Đóng'))],
           ),
         );
@@ -623,6 +672,17 @@ class _TransferGlobalFormState extends State<TransferGlobalForm> {
       developer.log('Creating snapshot for ticket $ticketId with ${imeiList.length} IMEIs');
       final snapshotData = await _createSnapshot(ticketId, imeiList);
 
+      // Get warehouse_id from first IMEI
+      String? originWarehouseId;
+      if (imeiList.isNotEmpty) {
+        final firstImeiData = await supabase
+            .from('products')
+            .select('warehouse_id')
+            .eq('imei', imeiList.first)
+            .maybeSingle();
+        originWarehouseId = firstImeiData?['warehouse_id']?.toString();
+      }
+
       // Prepare transporter order data
       final transporterOrder = {
         'id': ticketId,
@@ -631,6 +691,7 @@ class _TransferGlobalFormState extends State<TransferGlobalForm> {
         'transporter': transporter,
         'transport_fee': 0,
         'type': 'chuyển kho quốc tế',
+        'warehouse_id': originWarehouseId,
         'created_at': now.toIso8601String(),
         'iscancelled': false,
       };
@@ -695,18 +756,21 @@ class _TransferGlobalFormState extends State<TransferGlobalForm> {
           ),
         );
 
-        setState(() {
-          transporter = null;
-          productId = null;
-          imei = '';
-          productController.text = '';
-          imeiController.text = '';
-          imeiList = [];
-          imeiError = null;
-          isSubmitting = false;
-        });
-
-        await _fetchInitialData();
+        // Reset sau khi đóng dialog
+        if (mounted) {
+          setState(() {
+            transporter = null;
+            productId = null;
+            imei = '';
+            imeiList.clear(); // Use clear() instead of = []
+            imeiError = null;
+            isSubmitting = false;
+          });
+          
+          // Clear controllers
+          productController.clear();
+          imeiController.clear();
+        }
       }
     } catch (e) {
       print('Error saving transfer: $e');

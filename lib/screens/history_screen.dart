@@ -7,6 +7,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:open_file/open_file.dart';
 import 'dart:io';
 import 'dart:developer' as developer;
+import '../helpers/error_handler.dart';
 
 class HistoryScreen extends StatefulWidget {
   final List<String> permissions;
@@ -411,7 +412,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
           'table': 'fix_receive_orders',
           'key': 'ticket_id',
           'select': 'ticket_id, created_at, fixer, fix_unit_id, price, quantity, currency, account, iscancelled, product_id, warehouse_id, imei',
-          'partnerField': 'fixer',
+          'partnerField': 'fix_unit_id',
           'amountField': 'price',
           'dateField': 'created_at',
           'snapshotKey': 'ticket_id',
@@ -421,7 +422,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
           'table': 'fix_send_orders',
           'key': 'ticket_id',
           'select': 'ticket_id, created_at, fixer, fix_unit_id, quantity, iscancelled, product_id, warehouse_id, imei',
-          'partnerField': 'fixer',
+          'partnerField': 'fix_unit_id',
           'amountField': null,
           'dateField': 'created_at',
           'snapshotKey': 'ticket_id',
@@ -430,8 +431,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
         {
           'table': 'import_orders',
           'key': 'id',
-          'select': 'id, created_at, supplier, supplier_id, price, quantity, total_amount, currency, account, iscancelled, product_id, warehouse_id, imei',
-          'partnerField': 'supplier',
+          'select': 'id, created_at, supplier_id, price, quantity, total_amount, currency, account, iscancelled, product_id, warehouse_id, imei',
+          'partnerField': 'supplier_id',
           'amountField': 'price',
           'dateField': 'created_at',
           'snapshotKey': 'id',
@@ -440,8 +441,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
         {
           'table': 'reimport_orders',
           'key': 'ticket_id',
-          'select': 'ticket_id, created_at, customer, price, quantity, currency, account, iscancelled, product_id, warehouse_id, imei',
-          'partnerField': 'customer',
+          'select': 'ticket_id, created_at, customer_id, price, quantity, currency, account, iscancelled, product_id, warehouse_id, imei',
+          'partnerField': 'customer_id',
           'amountField': 'price',
           'dateField': 'created_at',
           'snapshotKey': 'ticket_id',
@@ -450,8 +451,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
         {
           'table': 'sale_orders',
           'key': 'ticket_id',
-          'select': 'ticket_id, created_at, customer, price, quantity, currency, account, customer_price, transporter_price, transporter, iscancelled, product_id, warehouse_id, imei',
-          'partnerField': 'customer',
+          'select': 'ticket_id, created_at, customer_id, price, quantity, currency, account, customer_price, transporter_price, transporter, iscancelled, product_id, warehouse_id, imei',
+          'partnerField': 'customer_id',
           'amountField': 'price',
           'dateField': 'created_at',
           'snapshotKey': 'ticket_id',
@@ -460,8 +461,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
         {
           'table': 'return_orders',
           'key': 'ticket_id',
-          'select': 'ticket_id, created_at, supplier, supplier_id, price, quantity, total_amount, currency, account, iscancelled, product_id, warehouse_id, imei',
-          'partnerField': 'supplier',
+          'select': 'ticket_id, created_at, supplier_id, price, quantity, total_amount, currency, account, iscancelled, product_id, warehouse_id, imei',
+          'partnerField': 'supplier_id',
           'amountField': 'price',
           'dateField': 'created_at',
           'snapshotKey': 'ticket_id',
@@ -550,7 +551,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
           }
 
           if (!groupedTickets.containsKey(ticketKey)) {
-            // Lấy tên đối tác - đặc biệt xử lý cho financial_orders
+            // Lấy tên đối tác - đặc biệt xử lý cho các loại phiếu
             String partnerName;
             if (tableName == 'financial_orders') {
               partnerName = _getPartnerName(
@@ -558,6 +559,22 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 tx['partner_type']?.toString(),
                 tx[partnerField]?.toString(),
               );
+            } else if (tableName == 'import_orders' || tableName == 'return_orders') {
+              // Nhà cung cấp - dùng supplier_id
+              final supplierId = tx[partnerField]?.toString();
+              partnerName = supplierId != null ? (supplierMap[supplierId] ?? 'N/A') : 'N/A';
+            } else if (tableName == 'sale_orders' || tableName == 'reimport_orders') {
+              // Khách hàng - dùng customer_id
+              final customerId = tx[partnerField]?.toString();
+              partnerName = customerId != null ? (customerMap[customerId] ?? 'N/A') : 'N/A';
+            } else if (tableName == 'fix_send_orders' || tableName == 'fix_receive_orders') {
+              // Đơn vị fix - dùng fix_unit_id nếu có, nếu không dùng fixer (tên)
+              final fixUnitId = tx['fix_unit_id']?.toString();
+              if (fixUnitId != null) {
+                partnerName = fixerMap[fixUnitId] ?? 'N/A';
+              } else {
+                partnerName = tx[partnerField]?.toString() ?? 'N/A';
+              }
             } else {
               partnerName = tx[partnerField]?.toString() ?? 'N/A';
             }
@@ -581,7 +598,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
             };
           }
 
-          // Lấy tên đối tác cho item - đặc biệt xử lý cho financial_orders
+          // Lấy tên đối tác cho item - đặc biệt xử lý cho các loại phiếu
           String itemPartnerName;
           if (tableName == 'financial_orders') {
             itemPartnerName = _getPartnerName(
@@ -589,6 +606,22 @@ class _HistoryScreenState extends State<HistoryScreen> {
               tx['partner_type']?.toString(),
               tx[partnerField]?.toString(),
             );
+          } else if (tableName == 'import_orders' || tableName == 'return_orders') {
+            // Nhà cung cấp - dùng supplier_id
+            final supplierId = tx[partnerField]?.toString();
+            itemPartnerName = supplierId != null ? (supplierMap[supplierId] ?? 'N/A') : 'N/A';
+          } else if (tableName == 'sale_orders' || tableName == 'reimport_orders') {
+            // Khách hàng - dùng customer_id
+            final customerId = tx[partnerField]?.toString();
+            itemPartnerName = customerId != null ? (customerMap[customerId] ?? 'N/A') : 'N/A';
+          } else if (tableName == 'fix_send_orders' || tableName == 'fix_receive_orders') {
+            // Đơn vị fix - dùng fix_unit_id nếu có, nếu không dùng fixer (tên)
+            final fixUnitId = tx['fix_unit_id']?.toString();
+            if (fixUnitId != null) {
+              itemPartnerName = fixerMap[fixUnitId] ?? 'N/A';
+            } else {
+              itemPartnerName = tx[partnerField]?.toString() ?? 'N/A';
+            }
           } else {
             itemPartnerName = tx[partnerField]?.toString() ?? 'N/A';
           }
