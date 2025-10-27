@@ -8,7 +8,6 @@ import 'dart:math' as math;
 import 'dart:developer' as developer;
 import '../../notification_service.dart';
 import '../../text_scanner_screen.dart';
-import '../../../helpers/error_handler.dart';
 
 // Constants for retry
 const int maxRetries = 3;

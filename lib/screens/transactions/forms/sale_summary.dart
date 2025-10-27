@@ -4,7 +4,6 @@ import 'package:intl/intl.dart';
 import '../../notification_service.dart';
 import 'sale_form.dart';
 import 'dart:math' as math;
-import '../../../../helpers/error_handler.dart';
 
 // Constants for batch processing
 const int maxBatchSize = 1000;
@@ -18,9 +17,7 @@ Future<T> retry<T>(Future<T> Function() fn, {String? operation}) async {
       return await fn();
     } catch (e) {
       if (attempt == maxRetries - 1) {
-        throw Exception(
-          '${operation ?? 'Operation'} failed after $maxRetries attempts: $e',
-        );
+        throw Exception('${operation ?? 'Operation'} failed after $maxRetries attempts: $e');
       }
       await Future.delayed(retryDelay * math.pow(2, attempt));
     }
@@ -89,58 +86,38 @@ class _SaleSummaryState extends State<SaleSummary> {
       final supabase = widget.tenantClient;
 
       final accountResponse = await retry(
-        () => supabase
-            .from('financial_accounts')
-            .select('id, name, currency, balance')
-            .eq('currency', widget.currency),
+        () => supabase.from('financial_accounts').select('id, name, currency, balance').eq('currency', widget.currency),
         operation: 'Fetch financial accounts',
       );
-      final accountList =
-          (accountResponse as List<dynamic>)
-              .map(
-                (e) => {
-                  'id': e['id'] as int,
-                  'name': e['name'] as String?,
-                  'currency': e['currency'] as String?,
-                  'balance': e['balance'] as num?,
-                },
-              )
-              .where((e) => e['name'] != null && e['currency'] != null)
-              .cast<Map<String, Object?>>()
-              .toList();
+      final accountList = (accountResponse as List<dynamic>)
+          .map((e) => {
+                'id': e['id'] as int,
+                'name': e['name'] as String?,
+                'currency': e['currency'] as String?,
+                'balance': e['balance'] as num?,
+              })
+          .where((e) => e['name'] != null && e['currency'] != null)
+          .cast<Map<String, Object?>>()
+          .toList();
 
       final transporterResponse = await retry(
-        () => supabase
-            .from('transporters')
-            .select('name')
-            .eq('type', 'vận chuyển nội địa'),
+        () => supabase.from('transporters').select('name').eq('type', 'vận chuyển nội địa'),
         operation: 'Fetch transporters',
       );
-      final transporterList =
-          (transporterResponse as List<dynamic>)
-              .map((e) => e['name'] as String?)
-              .whereType<String>()
-              .toList();
+      final transporterList = (transporterResponse as List<dynamic>).map((e) => e['name'] as String?).whereType<String>().toList();
 
       final customerResponse = await retry(
-        () =>
-            supabase
-                .from('customers')
-                .select('debt_vnd')
-                .eq('id', widget.customerId)
-                .single(),
+        () => supabase.from('customers').select('debt_vnd').eq('id', widget.customerId).single(),
         operation: 'Fetch customer debt',
       );
-      final debt =
-          double.tryParse(customerResponse['debt_vnd'].toString()) ?? 0;
+      final debt = double.tryParse(customerResponse['debt_vnd'].toString()) ?? 0;
 
       if (mounted) {
         setState(() {
           accounts = accountList;
           localTransporters = transporterList;
           customerDebt = debt < 0 ? -debt : 0;
-          accountNames =
-              accountList.map((acc) => acc['name'] as String).toList();
+          accountNames = accountList.map((acc) => acc['name'] as String).toList();
           accountNames.add('Công nợ');
           accountNames.add('Ship COD');
           isLoading = false;
@@ -158,58 +135,35 @@ class _SaleSummaryState extends State<SaleSummary> {
 
   double _calculateTotalAmount() {
     return widget.ticketItems.fold(0, (sum, item) {
-      final imeiCount =
-          (item['imei'] as String)
-              .split(',')
-              .where((e) => e.trim().isNotEmpty)
-              .length;
+      final imeiCount = (item['imei'] as String).split(',').where((e) => e.trim().isNotEmpty).length;
       return sum + (item['price'] as double) * imeiCount;
     });
   }
 
   int _calculateTotalImeiCount() {
     return widget.ticketItems.fold(0, (sum, item) {
-      return sum +
-          (item['imei'] as String)
-              .split(',')
-              .where((e) => e.trim().isNotEmpty)
-              .length;
+      return sum + (item['imei'] as String).split(',').where((e) => e.trim().isNotEmpty).length;
     });
   }
 
   String _getFirstProductName() {
-    return widget.ticketItems.isNotEmpty
-        ? widget.ticketItems.first['product_name'] as String
-        : 'Không xác định';
+    return widget.ticketItems.isNotEmpty ? widget.ticketItems.first['product_name'] as String : 'Không xác định';
   }
 
-  Future<Map<String, dynamic>> _createSnapshot(
-    String ticketId,
-    List<String> imeiList,
-  ) async {
+  Future<Map<String, dynamic>> _createSnapshot(String ticketId, List<String> imeiList) async {
     final supabase = widget.tenantClient;
     final snapshotData = <String, dynamic>{};
 
     try {
       final customerData = await retry(
-        () =>
-            supabase
-                .from('customers')
-                .select()
-                .eq('id', widget.customerId)
-                .single(),
+        () => supabase.from('customers').select().eq('id', widget.customerId).single(),
         operation: 'Fetch customer for snapshot',
       );
       snapshotData['customers'] = customerData;
 
       if (account == 'Ship COD' && transporter != null) {
         final transporterData = await retry(
-          () =>
-              supabase
-                  .from('transporters')
-                  .select()
-                  .eq('name', transporter!)
-                  .single(),
+          () => supabase.from('transporters').select().eq('name', transporter!).single(),
           operation: 'Fetch transporter for snapshot',
         );
         snapshotData['transporters'] = transporterData;
@@ -217,13 +171,7 @@ class _SaleSummaryState extends State<SaleSummary> {
 
       if (account != null && account != 'Công nợ' && account != 'Ship COD') {
         final accountData = await retry(
-          () =>
-              supabase
-                  .from('financial_accounts')
-                  .select()
-                  .eq('name', account!)
-                  .eq('currency', widget.currency)
-                  .single(),
+          () => supabase.from('financial_accounts').select().eq('name', account!).eq('currency', widget.currency).single(),
           operation: 'Fetch financial account for snapshot',
         );
         snapshotData['financial_accounts'] = accountData;
@@ -231,36 +179,28 @@ class _SaleSummaryState extends State<SaleSummary> {
 
       if (imeiList.isNotEmpty) {
         final response = await retry(
-          () => supabase
-              .from('products')
-              .select('*, saleman')
-              .inFilter('imei', imeiList),
+          () => supabase.from('products').select('*, saleman').inFilter('imei', imeiList),
           operation: 'Fetch products for snapshot',
         );
         snapshotData['products'] = response as List<dynamic>;
       }
 
-      snapshotData['sale_orders'] =
-          widget.ticketItems.map((item) {
-            final imeiList =
-                (item['imei'] as String)
-                    .split(',')
-                    .where((e) => e.trim().isNotEmpty)
-                    .toList();
-            return {
-              'ticket_id': ticketId,
-              'customer_id': widget.customerId,
-              'customer': widget.customerName,
-              'product_id': item['product_id'],
-              'product_name': item['product_name'],
-              'imei': item['imei'],
-              'quantity': imeiList.length,
-              'price': item['price'],
-              'currency': item['currency'],
-              'account': account,
-              'note': item['note'],
-            };
-          }).toList();
+      snapshotData['sale_orders'] = widget.ticketItems.map((item) {
+        final imeiList = (item['imei'] as String).split(',').where((e) => e.trim().isNotEmpty).toList();
+        return {
+          'ticket_id': ticketId,
+          'customer_id': widget.customerId,
+          'customer': widget.customerName,
+          'product_id': item['product_id'],
+          'product_name': item['product_name'],
+          'imei': item['imei'],
+          'quantity': imeiList.length,
+          'price': item['price'],
+          'currency': item['currency'],
+          'account': account,
+          'note': item['note'],
+        };
+      }).toList();
 
       return snapshotData;
     } catch (e) {
@@ -272,14 +212,13 @@ class _SaleSummaryState extends State<SaleSummary> {
     try {
       final supabase = widget.tenantClient;
       final response = await retry(
-        () =>
-            supabase
-                .from('financial_orders')
-                .select('rate_vnd_cny, rate_vnd_usd')
-                .eq('type', 'exchange')
-                .order('created_at', ascending: false)
-                .limit(1)
-                .maybeSingle(),
+        () => supabase
+            .from('financial_orders')
+            .select('rate_vnd_cny, rate_vnd_usd')
+            .eq('type', 'exchange')
+            .order('created_at', ascending: false)
+            .limit(1)
+            .maybeSingle(),
         operation: 'Get exchange rate',
       );
 
@@ -312,20 +251,14 @@ class _SaleSummaryState extends State<SaleSummary> {
 
   // ⚠️ OLD CODE - Kept for reference (now handled by RPC auto-rollback)
   // ignore: unused_element
-  Future<void> _rollbackChanges(
-    Map<String, dynamic> snapshot,
-    String ticketId,
-  ) async {
+  Future<void> _rollbackChanges(Map<String, dynamic> snapshot, String ticketId) async {
     final supabase = widget.tenantClient;
 
     try {
       if (snapshot.containsKey('customers') && snapshot['customers'] != null) {
         try {
           await retry(
-            () => supabase
-                .from('customers')
-                .update(snapshot['customers'])
-                .eq('id', widget.customerId),
+            () => supabase.from('customers').update(snapshot['customers']).eq('id', widget.customerId),
             operation: 'Rollback customers',
           );
         } catch (e) {
@@ -333,15 +266,10 @@ class _SaleSummaryState extends State<SaleSummary> {
         }
       }
 
-      if (snapshot.containsKey('transporters') &&
-          snapshot['transporters'] != null &&
-          transporter != null) {
+      if (snapshot.containsKey('transporters') && snapshot['transporters'] != null && transporter != null) {
         try {
           await retry(
-            () => supabase
-                .from('transporters')
-                .update(snapshot['transporters'])
-                .eq('name', transporter!),
+            () => supabase.from('transporters').update(snapshot['transporters']).eq('name', transporter!),
             operation: 'Rollback transporters',
           );
         } catch (e) {
@@ -349,9 +277,7 @@ class _SaleSummaryState extends State<SaleSummary> {
         }
       }
 
-      if (snapshot.containsKey('financial_accounts') &&
-          snapshot['financial_accounts'] != null &&
-          account != null) {
+      if (snapshot.containsKey('financial_accounts') && snapshot['financial_accounts'] != null && account != null) {
         try {
           await retry(
             () => supabase
@@ -370,10 +296,7 @@ class _SaleSummaryState extends State<SaleSummary> {
         for (var product in snapshot['products'] as List<dynamic>) {
           try {
             await retry(
-              () => supabase
-                  .from('products')
-                  .update(product)
-                  .eq('imei', product['imei']),
+              () => supabase.from('products').update(product).eq('imei', product['imei']),
               operation: 'Rollback product ${product['imei']}',
             );
           } catch (e) {
@@ -433,36 +356,27 @@ class _SaleSummaryState extends State<SaleSummary> {
       final productsData = await retry(
         () => supabase
             .from('products')
-            .select(
-              'imei, status, saleman, sale_price, customer_price, transporter_price, profit, customer',
-            )
+            .select('imei, status, saleman, sale_price, customer_price, transporter_price, profit, customer')
             .inFilter('imei', allImeis),
         operation: 'Verify products',
       );
 
       for (var product in productsData as List<dynamic>) {
-        if (product['status'] != 'Đã bán' ||
+        if (product['status'] != 'Đã bán' || 
             product['saleman'] != widget.salesman ||
             product['customer'] != widget.customerName) {
-          print(
-            'Product ${product['imei']} not properly updated: status=${product['status']}, saleman=${product['saleman']}, customer=${product['customer']}',
-          );
+          print('Product ${product['imei']} not properly updated: status=${product['status']}, saleman=${product['saleman']}, customer=${product['customer']}');
           return false;
         }
 
         if (account == 'Ship COD') {
-          final customerPrice =
-              double.tryParse(product['customer_price'].toString()) ?? 0;
-          final transporterPrice =
-              double.tryParse(product['transporter_price'].toString()) ?? 0;
-          final expectedTransporterPrice =
-              transporterPricePerImei[product['imei']] ?? 0;
+          final customerPrice = double.tryParse(product['customer_price'].toString()) ?? 0;
+          final transporterPrice = double.tryParse(product['transporter_price'].toString()) ?? 0;
+          final expectedTransporterPrice = transporterPricePerImei[product['imei']] ?? 0;
 
-          if ((customerPrice - customerPricePerImei).abs() > 0.01 ||
-              (transporterPrice - expectedTransporterPrice).abs() > 0.01) {
+          if ((customerPrice - customerPricePerImei).abs() > 0.01 || (transporterPrice - expectedTransporterPrice).abs() > 0.01) {
             print(
-              'Product ${product['imei']} COD prices mismatch: customer_price=$customerPrice (expected $customerPricePerImei), transporter_price=$transporterPrice (expected $expectedTransporterPrice)',
-            );
+                'Product ${product['imei']} COD prices mismatch: customer_price=$customerPrice (expected $customerPricePerImei), transporter_price=$transporterPrice (expected $expectedTransporterPrice)');
             return false;
           }
         }
@@ -470,100 +384,55 @@ class _SaleSummaryState extends State<SaleSummary> {
 
       if (account == 'Công nợ') {
         final customerData = await retry(
-          () =>
-              supabase
-                  .from('customers')
-                  .select('debt_vnd, debt_cny, debt_usd')
-                  .eq('id', widget.customerId)
-                  .single(),
+          () => supabase.from('customers').select('debt_vnd, debt_cny, debt_usd').eq('id', widget.customerId).single(),
           operation: 'Verify customer debt',
         );
 
         final debtColumn = 'debt_${widget.currency.toLowerCase()}';
-        final snapshotDebt =
-            double.tryParse(snapshotData['customers'][debtColumn].toString()) ??
-            0;
-        final currentDebt =
-            double.tryParse(customerData[debtColumn].toString()) ?? 0;
+        final snapshotDebt = double.tryParse(snapshotData['customers'][debtColumn].toString()) ?? 0;
+        final currentDebt = double.tryParse(customerData[debtColumn].toString()) ?? 0;
 
         if ((currentDebt - (snapshotDebt + totalAmount)).abs() > 0.01) {
-          print(
-            'Customer debt mismatch for $debtColumn: current=$currentDebt, snapshot=$snapshotDebt, total=$totalAmount',
-          );
+          print('Customer debt mismatch for $debtColumn: current=$currentDebt, snapshot=$snapshotDebt, total=$totalAmount');
           return false;
         }
       } else if (account == 'Ship COD') {
         final customerData = await retry(
-          () =>
-              supabase
-                  .from('customers')
-                  .select('debt_vnd')
-                  .eq('id', widget.customerId)
-                  .single(),
+          () => supabase.from('customers').select('debt_vnd').eq('id', widget.customerId).single(),
           operation: 'Verify customer COD debt',
         );
 
-        final snapshotDebtVnd =
-            double.tryParse(snapshotData['customers']['debt_vnd'].toString()) ??
-            0;
-        final currentDebtVnd =
-            double.tryParse(customerData['debt_vnd'].toString()) ?? 0;
+        final snapshotDebtVnd = double.tryParse(snapshotData['customers']['debt_vnd'].toString()) ?? 0;
+        final currentDebtVnd = double.tryParse(customerData['debt_vnd'].toString()) ?? 0;
 
         if ((currentDebtVnd - (snapshotDebtVnd + depositValue)).abs() > 0.01) {
-          print(
-            'Customer VND debt mismatch for COD: current=$currentDebtVnd, snapshot=$snapshotDebtVnd, deposit=$depositValue',
-          );
+          print('Customer VND debt mismatch for COD: current=$currentDebtVnd, snapshot=$snapshotDebtVnd, deposit=$depositValue');
           return false;
         }
 
         final transporterData = await retry(
-          () =>
-              supabase
-                  .from('transporters')
-                  .select('debt')
-                  .eq('name', transporter!)
-                  .single(),
+          () => supabase.from('transporters').select('debt').eq('name', transporter!).single(),
           operation: 'Verify transporter debt',
         );
 
-        final snapshotTransporterDebt =
-            double.tryParse(snapshotData['transporters']['debt'].toString()) ??
-            0;
-        final currentTransporterDebt =
-            double.tryParse(transporterData['debt'].toString()) ?? 0;
+        final snapshotTransporterDebt = double.tryParse(snapshotData['transporters']['debt'].toString()) ?? 0;
+        final currentTransporterDebt = double.tryParse(transporterData['debt'].toString()) ?? 0;
 
-        if ((currentTransporterDebt - (snapshotTransporterDebt - codAmount))
-                .abs() >
-            0.01) {
-          print(
-            'Transporter debt mismatch: current=$currentTransporterDebt, snapshot=$snapshotTransporterDebt, cod=$codAmount',
-          );
+        if ((currentTransporterDebt - (snapshotTransporterDebt - codAmount)).abs() > 0.01) {
+          print('Transporter debt mismatch: current=$currentTransporterDebt, snapshot=$snapshotTransporterDebt, cod=$codAmount');
           return false;
         }
       } else if (account != null) {
         final accountData = await retry(
-          () =>
-              supabase
-                  .from('financial_accounts')
-                  .select('balance')
-                  .eq('name', account!)
-                  .eq('currency', widget.currency)
-                  .single(),
+          () => supabase.from('financial_accounts').select('balance').eq('name', account!).eq('currency', widget.currency).single(),
           operation: 'Verify account balance',
         );
 
-        final snapshotBalance =
-            double.tryParse(
-              snapshotData['financial_accounts']['balance'].toString(),
-            ) ??
-            0;
-        final currentBalance =
-            double.tryParse(accountData['balance'].toString()) ?? 0;
+        final snapshotBalance = double.tryParse(snapshotData['financial_accounts']['balance'].toString()) ?? 0;
+        final currentBalance = double.tryParse(accountData['balance'].toString()) ?? 0;
 
         if ((currentBalance - (snapshotBalance + totalAmount)).abs() > 0.01) {
-          print(
-            'Account balance mismatch: current=$currentBalance, snapshot=$snapshotBalance, total=$totalAmount',
-          );
+          print('Account balance mismatch: current=$currentBalance, snapshot=$snapshotBalance, total=$totalAmount');
           return false;
         }
       }
@@ -581,17 +450,16 @@ class _SaleSummaryState extends State<SaleSummary> {
     if (account == null) {
       await showDialog(
         context: scaffoldContext,
-        builder:
-            (context) => AlertDialog(
-              title: const Text('Thông báo'),
-              content: const Text('Vui lòng chọn tài khoản thanh toán!'),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Đóng'),
-                ),
-              ],
+        builder: (context) => AlertDialog(
+          title: const Text('Thông báo'),
+          content: const Text('Vui lòng chọn tài khoản thanh toán!'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Đóng'),
             ),
+          ],
+        ),
       );
       return;
     }
@@ -599,19 +467,16 @@ class _SaleSummaryState extends State<SaleSummary> {
     if (account == 'Ship COD' && transporter == null) {
       await showDialog(
         context: scaffoldContext,
-        builder:
-            (context) => AlertDialog(
-              title: const Text('Thông báo'),
-              content: const Text(
-                'Vui lòng chọn đơn vị vận chuyển nội địa khi chọn Ship COD!',
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Đóng'),
-                ),
-              ],
+        builder: (context) => AlertDialog(
+          title: const Text('Thông báo'),
+          content: const Text('Vui lòng chọn đơn vị vận chuyển nội địa khi chọn Ship COD!'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Đóng'),
             ),
+          ],
+        ),
       );
       return;
     }
@@ -619,28 +484,21 @@ class _SaleSummaryState extends State<SaleSummary> {
     final imeiMap = <String, String>{};
     List<String> allImeis = [];
     for (var item in widget.ticketItems) {
-      final imeiList =
-          (item['imei'] as String)
-              .split(',')
-              .where((e) => e.trim().isNotEmpty)
-              .toList();
+      final imeiList = (item['imei'] as String).split(',').where((e) => e.trim().isNotEmpty).toList();
       for (var imei in imeiList) {
         if (imeiMap.containsKey(imei)) {
           await showDialog(
             context: scaffoldContext,
-            builder:
-                (context) => AlertDialog(
-                  title: const Text('Thông báo'),
-                  content: Text(
-                    'IMEI "$imei" xuất hiện trong nhiều sản phẩm (ID: ${imeiMap[imei]} và ${item['product_id']}). Mỗi IMEI chỉ được phép thuộc một sản phẩm!',
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text('Đóng'),
-                    ),
-                  ],
+            builder: (context) => AlertDialog(
+              title: const Text('Thông báo'),
+              content: Text('IMEI "$imei" xuất hiện trong nhiều sản phẩm (ID: ${imeiMap[imei]} và ${item['product_id']}). Mỗi IMEI chỉ được phép thuộc một sản phẩm!'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Đóng'),
                 ),
+              ],
+            ),
           );
           return;
         }
@@ -652,19 +510,16 @@ class _SaleSummaryState extends State<SaleSummary> {
     if (allImeis.any((imei) => imei.trim().isEmpty)) {
       await showDialog(
         context: scaffoldContext,
-        builder:
-            (context) => AlertDialog(
-              title: const Text('Thông báo'),
-              content: const Text(
-                'Danh sách IMEI chứa giá trị không hợp lệ (rỗng hoặc khoảng trắng)!',
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Đóng'),
-                ),
-              ],
+        builder: (context) => AlertDialog(
+          title: const Text('Thông báo'),
+          content: const Text('Danh sách IMEI chứa giá trị không hợp lệ (rỗng hoặc khoảng trắng)!'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Đóng'),
             ),
+          ],
+        ),
       );
       return;
     }
@@ -672,27 +527,23 @@ class _SaleSummaryState extends State<SaleSummary> {
     final totalAmount = _calculateTotalAmount();
     final totalImeiCount = _calculateTotalImeiCount();
     final firstProductName = _getFirstProductName();
-    final depositValue =
-        double.tryParse(deposit?.replaceAll('.', '') ?? '0') ?? 0;
+    final depositValue = double.tryParse(deposit?.replaceAll('.', '') ?? '0') ?? 0;
     final codAmount = totalAmount - depositValue;
 
     if (account == 'Ship COD') {
       if (depositValue > customerDebt) {
         await showDialog(
           context: scaffoldContext,
-          builder:
-              (context) => AlertDialog(
-                title: const Text('Thông báo'),
-                content: const Text(
-                  'Tiền cọc không được lớn hơn số tiền khách dư!',
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('Đóng'),
-                  ),
-                ],
+          builder: (context) => AlertDialog(
+            title: const Text('Thông báo'),
+            content: const Text('Tiền cọc không được lớn hơn số tiền khách dư!'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Đóng'),
               ),
+            ],
+          ),
         );
         return;
       }
@@ -703,59 +554,44 @@ class _SaleSummaryState extends State<SaleSummary> {
     if (allImeis.isNotEmpty) {
       try {
         final response = await retry(
-          () => supabase
-              .from('products')
-              .select('imei, product_id, status')
-              .inFilter('imei', allImeis)
-              .eq('status', 'Tồn kho'),
+          () => supabase.from('products').select('imei, product_id, status').inFilter('imei', allImeis).eq('status', 'Tồn kho'),
           operation: 'Validate IMEIs',
         );
 
         final validImeis =
-            (response as List<dynamic>)
-                .where(
-                  (p) => widget.ticketItems.any(
-                    (item) => item['product_id'] == p['product_id'],
-                  ),
-                )
-                .map((p) => p['imei'] as String)
-                .toList();
+            (response as List<dynamic>).where((p) => widget.ticketItems.any((item) => item['product_id'] == p['product_id'])).map((p) => p['imei'] as String).toList();
 
-        final invalidImeis =
-            allImeis.where((imei) => !validImeis.contains(imei)).toList();
+        final invalidImeis = allImeis.where((imei) => !validImeis.contains(imei)).toList();
         if (invalidImeis.isNotEmpty) {
           await showDialog(
             context: scaffoldContext,
-            builder:
-                (context) => AlertDialog(
-                  title: const Text('Thông báo'),
-                  content: Text(
-                    'Các IMEI sau không tồn tại, không thuộc sản phẩm đã chọn, hoặc không ở trạng thái Tồn kho: ${invalidImeis.take(10).join(', ')}${invalidImeis.length > 10 ? '...' : ''}',
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text('Đóng'),
-                    ),
-                  ],
+            builder: (context) => AlertDialog(
+              title: const Text('Thông báo'),
+              content: Text(
+                  'Các IMEI sau không tồn tại, không thuộc sản phẩm đã chọn, hoặc không ở trạng thái Tồn kho: ${invalidImeis.take(10).join(', ')}${invalidImeis.length > 10 ? '...' : ''}'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Đóng'),
                 ),
+              ],
+            ),
           );
           return;
         }
       } catch (e) {
         await showDialog(
           context: scaffoldContext,
-          builder:
-              (context) => AlertDialog(
-                title: const Text('Thông báo'),
-                content: Text('Lỗi khi kiểm tra IMEI: $e'),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('Đóng'),
-                  ),
-                ],
+          builder: (context) => AlertDialog(
+            title: const Text('Thông báo'),
+            content: Text('Lỗi khi kiểm tra IMEI: $e'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Đóng'),
               ),
+            ],
+          ),
         );
         return;
       }
@@ -778,12 +614,7 @@ class _SaleSummaryState extends State<SaleSummary> {
       List<Map<String, dynamic>> productsDataBeforeUpdate = [];
       if (allImeis.isNotEmpty) {
         final response = await retry(
-          () => supabase
-              .from('products')
-              .select(
-                'imei, product_id, cost_price, warehouse_id, warehouse_name',
-              )
-              .inFilter('imei', allImeis),
+          () => supabase.from('products').select('imei, product_id, cost_price, warehouse_id, warehouse_name').inFilter('imei', allImeis),
           operation: 'Fetch products data',
         );
         productsDataBeforeUpdate = List<Map<String, dynamic>>.from(response);
@@ -799,14 +630,9 @@ class _SaleSummaryState extends State<SaleSummary> {
       double customerPricePerImei = 0;
       final Map<String, double> transporterPricePerImei = {};
       if (account == 'Ship COD') {
-        customerPricePerImei =
-            totalImeiCount > 0 ? depositValue / totalImeiCount : 0;
+        customerPricePerImei = totalImeiCount > 0 ? depositValue / totalImeiCount : 0;
         for (var item in widget.ticketItems) {
-          final imeiList =
-              (item['imei'] as String)
-                  .split(',')
-                  .where((e) => e.trim().isNotEmpty)
-                  .toList();
+          final imeiList = (item['imei'] as String).split(',').where((e) => e.trim().isNotEmpty).toList();
           final itemPrice = item['price'] as double;
           for (var imei in imeiList) {
             transporterPricePerImei[imei] = itemPrice - customerPricePerImei;
@@ -817,40 +643,28 @@ class _SaleSummaryState extends State<SaleSummary> {
       // Prepare sale orders data with profit calculation
       final List<Map<String, dynamic>> saleOrdersList = [];
       for (var item in widget.ticketItems) {
-        final imeiList =
-            (item['imei'] as String)
-                .split(',')
-                .where((e) => e.trim().isNotEmpty)
-                .toList();
+        final imeiList = (item['imei'] as String).split(',').where((e) => e.trim().isNotEmpty).toList();
         final imeiCount = imeiList.length;
-        final productData =
-            productsDataBeforeUpdate
-                .where((data) => imeiList.contains(data['imei']))
-                .toList();
-        final warehouseId =
-            productData.isNotEmpty
-                ? productData.first['warehouse_id'] as String? ?? ''
-                : '';
-
+        final productData = productsDataBeforeUpdate.where((data) => imeiList.contains(data['imei'])).toList();
+        final warehouseId = productData.isNotEmpty ? productData.first['warehouse_id'] as String? ?? '' : '';
+        
         // Calculate profit for this item
-        final salePriceInVND =
-            item['currency'] == 'CNY'
-                ? (item['price'] as double) * exchangeRate
-                : item['currency'] == 'USD'
+        final salePriceInVND = item['currency'] == 'CNY'
+            ? (item['price'] as double) * exchangeRate
+            : item['currency'] == 'USD'
                 ? (item['price'] as double) * exchangeRate
                 : item['price'] as double;
-
+        
         double totalProfit = 0;
         for (var imei in imeiList) {
           final productInfo = productsDataBeforeUpdate.firstWhere(
             (data) => data['imei'] == imei,
             orElse: () => {'cost_price': 0},
           );
-          final costPrice =
-              double.tryParse(productInfo['cost_price'].toString()) ?? 0;
+          final costPrice = double.tryParse(productInfo['cost_price'].toString()) ?? 0;
           totalProfit += (salePriceInVND - costPrice);
         }
-
+        
         saleOrdersList.add({
           'customer_id': widget.customerId,
           'customer': widget.customerName,
@@ -876,15 +690,10 @@ class _SaleSummaryState extends State<SaleSummary> {
       // Prepare products updates
       final List<Map<String, dynamic>> productsUpdatesList = [];
       for (var item in widget.ticketItems) {
-        final imeiList =
-            (item['imei'] as String)
-                .split(',')
-                .where((e) => e.trim().isNotEmpty)
-                .toList();
-        final salePriceInVND =
-            item['currency'] == 'CNY'
-                ? (item['price'] as double) * exchangeRate
-                : item['currency'] == 'USD'
+        final imeiList = (item['imei'] as String).split(',').where((e) => e.trim().isNotEmpty).toList();
+        final salePriceInVND = item['currency'] == 'CNY'
+            ? (item['price'] as double) * exchangeRate
+            : item['currency'] == 'USD'
                 ? (item['price'] as double) * exchangeRate
                 : item['price'] as double;
 
@@ -893,9 +702,8 @@ class _SaleSummaryState extends State<SaleSummary> {
             (data) => data['imei'] == imei,
             orElse: () => {'cost_price': 0},
           );
-          final costPrice =
-              double.tryParse(productInfo['cost_price'].toString()) ?? 0;
-
+          final costPrice = double.tryParse(productInfo['cost_price'].toString()) ?? 0;
+          
           productsUpdatesList.add({
             'imei': imei,
             'status': 'Đã bán',
@@ -904,12 +712,8 @@ class _SaleSummaryState extends State<SaleSummary> {
             'sale_price': salePriceInVND,
             'profit': salePriceInVND - costPrice,
             'customer': widget.customerName,
-            'customer_price':
-                account == 'Ship COD' ? customerPricePerImei : null,
-            'transporter_price':
-                account == 'Ship COD'
-                    ? (transporterPricePerImei[imei] ?? 0)
-                    : null,
+            'customer_price': account == 'Ship COD' ? customerPricePerImei : null,
+            'transporter_price': account == 'Ship COD' ? (transporterPricePerImei[imei] ?? 0) : null,
             'transporter': account == 'Ship COD' ? transporter : null,
           });
         }
@@ -934,8 +738,7 @@ class _SaleSummaryState extends State<SaleSummary> {
       // Prepare transporter debt change
       double? transporterDebtChange;
       if (account == 'Ship COD') {
-        transporterDebtChange =
-            -codAmount; // Negative because transporter owes us
+        transporterDebtChange = -codAmount; // Negative because transporter owes us
       }
 
       // Prepare account balance change
@@ -956,38 +759,31 @@ class _SaleSummaryState extends State<SaleSummary> {
 
       // ✅ CALL RPC FUNCTION - All operations in ONE atomic transaction
       final result = await retry(
-        () => supabase.rpc(
-          'create_sale_transaction',
-          params: {
-            'p_ticket_id': ticketId,
-            'p_customer_id': widget.customerId,
-            'p_customer_name': widget.customerName,
-            'p_salesman': widget.salesman,
-            'p_account': account ?? '',
-            'p_currency': widget.currency,
-            'p_transporter': transporter,
-            'p_sale_orders': saleOrdersList,
-            'p_products_updates': productsUpdatesList,
-            'p_customer_debt_change': customerDebtChange,
-            'p_transporter_debt_change': transporterDebtChange,
-            'p_account_balance_change': accountBalanceChange,
-            'p_snapshot_data': snapshotData,
-            'p_created_at': now.toIso8601String(),
-          },
-        ),
+        () => supabase.rpc('create_sale_transaction', params: {
+          'p_ticket_id': ticketId,
+          'p_customer_id': widget.customerId,
+          'p_customer_name': widget.customerName,
+          'p_salesman': widget.salesman,
+          'p_account': account ?? '',
+          'p_currency': widget.currency,
+          'p_transporter': transporter,
+          'p_sale_orders': saleOrdersList,
+          'p_products_updates': productsUpdatesList,
+          'p_customer_debt_change': customerDebtChange,
+          'p_transporter_debt_change': transporterDebtChange,
+          'p_account_balance_change': accountBalanceChange,
+          'p_snapshot_data': snapshotData,
+          'p_created_at': now.toIso8601String(),
+        }),
         operation: 'Create sale transaction (RPC)',
       );
 
       // Check result
       if (result == null || result['success'] != true) {
-        throw Exception(
-          'RPC function returned error: ${result?['message'] ?? 'Unknown error'}',
-        );
+        throw Exception('RPC function returned error: ${result?['message'] ?? 'Unknown error'}');
       }
 
-      print(
-        '✅ Sale transaction completed successfully: ${result['ticket_id']}',
-      );
+      print('✅ Sale transaction completed successfully: ${result['ticket_id']}');
 
       await NotificationService.showNotification(
         138,
@@ -1010,9 +806,7 @@ class _SaleSummaryState extends State<SaleSummary> {
             behavior: SnackBarBehavior.floating,
             margin: const EdgeInsets.all(8),
             duration: const Duration(seconds: 3),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(8),
-            ),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
           ),
         );
         Navigator.pop(context);
@@ -1021,44 +815,39 @@ class _SaleSummaryState extends State<SaleSummary> {
     } catch (e) {
       print('❌ ERROR: $e');
       print('❌ ERROR TYPE: ${e.runtimeType}');
-
+      
       if (mounted) {
         setState(() {
           isProcessing = false;
         });
-
+        
         // Show detailed error for debugging
         String errorMessage = e.toString();
         if (e is PostgrestException) {
-          errorMessage =
-              'PostgrestException:\n'
+          errorMessage = 'PostgrestException:\n'
               'Message: ${e.message}\n'
               'Code: ${e.code}\n'
               'Details: ${e.details}\n'
               'Hint: ${e.hint}';
         }
-
+        
         await showDialog(
           context: scaffoldContext,
-          builder:
-              (context) => AlertDialog(
-                title: const Text('Lỗi tạo phiếu bán hàng'),
-                content: SingleChildScrollView(
-                  child: SelectableText(
-                    errorMessage,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontFamily: 'monospace',
-                    ),
-                  ),
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('Đóng'),
-                  ),
-                ],
+          builder: (context) => AlertDialog(
+            title: const Text('Lỗi tạo phiếu bán hàng'),
+            content: SingleChildScrollView(
+              child: SelectableText(
+                errorMessage,
+                style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
               ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Đóng'),
+              ),
+            ],
+          ),
         );
       }
     }
@@ -1102,16 +891,12 @@ class _SaleSummaryState extends State<SaleSummary> {
     }
 
     final totalAmount = _calculateTotalAmount();
-    final depositValue =
-        double.tryParse(deposit?.replaceAll('.', '') ?? '0') ?? 0;
+    final depositValue = double.tryParse(deposit?.replaceAll('.', '') ?? '0') ?? 0;
     codAmount = totalAmount - depositValue;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text(
-          'Danh sách sản phẩm',
-          style: TextStyle(color: Colors.white),
-        ),
+        title: const Text('Danh sách sản phẩm', style: TextStyle(color: Colors.white)),
         backgroundColor: Colors.black,
         iconTheme: const IconThemeData(color: Colors.white),
       ),
@@ -1127,10 +912,7 @@ class _SaleSummaryState extends State<SaleSummary> {
                     children: [
                       const Text(
                         'Danh sách sản phẩm đã thêm:',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                       ),
                       const SizedBox(height: 8),
                       Container(
@@ -1143,16 +925,9 @@ class _SaleSummaryState extends State<SaleSummary> {
                           itemCount: widget.ticketItems.length,
                           itemBuilder: (context, index) {
                             final item = widget.ticketItems[index];
-                            final imeiCount =
-                                (item['imei'] as String)
-                                    .split(',')
-                                    .where((e) => e.trim().isNotEmpty)
-                                    .length;
+                            final imeiCount = (item['imei'] as String).split(',').where((e) => e.trim().isNotEmpty).length;
                             return Card(
-                              margin: const EdgeInsets.symmetric(
-                                vertical: 4,
-                                horizontal: 8,
-                              ),
+                              margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
                               child: Padding(
                                 padding: const EdgeInsets.all(8.0),
                                 child: Row(
@@ -1160,77 +935,44 @@ class _SaleSummaryState extends State<SaleSummary> {
                                   children: [
                                     Expanded(
                                       child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
+                                        crossAxisAlignment: CrossAxisAlignment.start,
                                         children: [
-                                          Text(
-                                            'Sản phẩm: ${item['product_name']}',
-                                          ),
+                                          Text('Sản phẩm: ${item['product_name']}'),
                                           Text('Số IMEI: $imeiCount'),
-                                          Text(
-                                            'Số tiền: ${formatNumberLocal(item['price'])} ${item['currency']}',
-                                          ),
-                                          Text(
-                                            'Ghi chú: ${item['note'] ?? ''}',
-                                          ),
+                                          Text('Số tiền: ${formatNumberLocal(item['price'])} ${item['currency']}'),
+                                          Text('Ghi chú: ${item['note'] ?? ''}'),
                                         ],
                                       ),
                                     ),
                                     Column(
                                       children: [
                                         IconButton(
-                                          icon: const Icon(
-                                            Icons.edit,
-                                            color: Colors.blue,
-                                            size: 20,
-                                          ),
+                                          icon: const Icon(Icons.edit, color: Colors.blue, size: 20),
                                           onPressed: () {
                                             Navigator.push(
                                               context,
                                               MaterialPageRoute(
-                                                builder:
-                                                    (context) => SaleForm(
-                                                      tenantClient:
-                                                          widget.tenantClient,
-                                                      initialCustomer:
-                                                          widget.customerName,
-                                                      initialProductId:
-                                                          item['product_id']
-                                                              as String,
-                                                      initialProductName:
-                                                          item['product_name']
-                                                              as String,
-                                                      initialPrice:
-                                                          (item['price']
-                                                                  as double)
-                                                              .toString(),
-                                                      initialImei:
-                                                          item['imei']
-                                                              as String,
-                                                      initialNote:
-                                                          item['note']
-                                                              as String?,
-                                                      initialSalesman:
-                                                          widget.salesman,
-                                                      ticketItems:
-                                                          widget.ticketItems,
-                                                      editIndex: index,
-                                                    ),
+                                                builder: (context) => SaleForm(
+                                                  tenantClient: widget.tenantClient,
+                                                  initialCustomer: widget.customerName,
+                                                  initialProductId: item['product_id'] as String,
+                                                  initialProductName: item['product_name'] as String,
+                                                  initialPrice: (item['price'] as double).toString(),
+                                                  initialImei: item['imei'] as String,
+                                                  initialNote: item['note'] as String?,
+                                                  initialSalesman: widget.salesman,
+                                                  ticketItems: widget.ticketItems,
+                                                  editIndex: index,
+                                                ),
                                               ),
                                             );
                                           },
                                         ),
                                         IconButton(
-                                          icon: const Icon(
-                                            Icons.delete,
-                                            color: Colors.red,
-                                            size: 20,
-                                          ),
+                                          icon: const Icon(Icons.delete, color: Colors.red, size: 20),
                                           onPressed: () {
                                             setState(() {
-                                              widget.ticketItems.removeAt(
-                                                index,
-                                              );
+                                              widget.ticketItems.removeAt(index);
                                             });
                                           },
                                         ),
@@ -1246,10 +988,7 @@ class _SaleSummaryState extends State<SaleSummary> {
                       const SizedBox(height: 16),
                       Text(
                         'Tổng tiền: ${formatNumberLocal(totalAmount)} ${widget.currency}',
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
+                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                       ),
                       const SizedBox(height: 8),
                       Text('Nhân viên bán: ${widget.salesman}'),
@@ -1259,15 +998,7 @@ class _SaleSummaryState extends State<SaleSummary> {
                       wrapField(
                         DropdownButtonFormField<String>(
                           value: account,
-                          items:
-                              accountNames
-                                  .map(
-                                    (e) => DropdownMenuItem(
-                                      value: e,
-                                      child: Text(e),
-                                    ),
-                                  )
-                                  .toList(),
+                          items: accountNames.map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
                           hint: const Text('Tài khoản'),
                           onChanged: (val) {
                             setState(() {
@@ -1291,22 +1022,15 @@ class _SaleSummaryState extends State<SaleSummary> {
                             Expanded(
                               child: wrapField(
                                 Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                   children: [
                                     const Text(
                                       'Khách dư',
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        color: Colors.black54,
-                                      ),
+                                      style: TextStyle(fontSize: 14, color: Colors.black54),
                                     ),
                                     Text(
                                       formatNumberLocal(customerDebt),
-                                      style: const TextStyle(
-                                        fontSize: 14,
-                                        color: Colors.black,
-                                      ),
+                                      style: const TextStyle(fontSize: 14, color: Colors.black),
                                     ),
                                   ],
                                 ),
@@ -1319,39 +1043,26 @@ class _SaleSummaryState extends State<SaleSummary> {
                                   controller: depositController,
                                   keyboardType: TextInputType.number,
                                   onChanged: (val) {
-                                    final cleanedValue = val.replaceAll(
-                                      RegExp(r'[^0-9]'),
-                                      '',
-                                    );
+                                    final cleanedValue = val.replaceAll(RegExp(r'[^0-9]'), '');
                                     if (cleanedValue.isNotEmpty) {
-                                      final parsedValue = double.tryParse(
-                                        cleanedValue,
-                                      );
+                                      final parsedValue = double.tryParse(cleanedValue);
                                       if (parsedValue != null) {
-                                        final formattedValue = numberFormat
-                                            .format(parsedValue);
-                                        depositController
-                                            .value = TextEditingValue(
+                                        final formattedValue = numberFormat.format(parsedValue);
+                                        depositController.value = TextEditingValue(
                                           text: formattedValue,
-                                          selection: TextSelection.collapsed(
-                                            offset: formattedValue.length,
-                                          ),
+                                          selection: TextSelection.collapsed(offset: formattedValue.length),
                                         );
                                         setState(() {
                                           deposit = cleanedValue;
-                                          final depositValue =
-                                              double.tryParse(deposit!) ?? 0;
+                                          final depositValue = double.tryParse(deposit!) ?? 0;
                                           if (depositValue > customerDebt) {
-                                            depositError =
-                                                'Tiền cọc không được lớn hơn khách dư!';
+                                            depositError = 'Tiền cọc không được lớn hơn khách dư!';
                                           } else if (depositValue < 0) {
-                                            depositError =
-                                                'Tiền cọc không được nhỏ hơn 0!';
+                                            depositError = 'Tiền cọc không được nhỏ hơn 0!';
                                           } else {
                                             depositError = null;
                                           }
-                                          codAmount =
-                                              totalAmount - depositValue;
+                                          codAmount = totalAmount - depositValue;
                                         });
                                       }
                                     } else {
@@ -1378,22 +1089,15 @@ class _SaleSummaryState extends State<SaleSummary> {
                             Expanded(
                               child: wrapField(
                                 Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                   children: [
                                     const Text(
                                       'Tiền COD',
-                                      style: TextStyle(
-                                        fontSize: 14,
-                                        color: Colors.black54,
-                                      ),
+                                      style: TextStyle(fontSize: 14, color: Colors.black54),
                                     ),
                                     Text(
                                       formatNumberLocal(codAmount),
-                                      style: const TextStyle(
-                                        fontSize: 14,
-                                        color: Colors.black,
-                                      ),
+                                      style: const TextStyle(fontSize: 14, color: Colors.black),
                                     ),
                                   ],
                                 ),
@@ -1404,19 +1108,9 @@ class _SaleSummaryState extends State<SaleSummary> {
                               child: wrapField(
                                 DropdownButtonFormField<String>(
                                   value: transporter,
-                                  items:
-                                      localTransporters
-                                          .map(
-                                            (e) => DropdownMenuItem(
-                                              value: e,
-                                              child: Text(e),
-                                            ),
-                                          )
-                                          .toList(),
+                                  items: localTransporters.map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
                                   hint: const Text('Đơn vị vận chuyển'),
-                                  onChanged:
-                                      (val) =>
-                                          setState(() => transporter = val),
+                                  onChanged: (val) => setState(() => transporter = val),
                                   decoration: const InputDecoration(
                                     border: InputBorder.none,
                                     isDense: true,
@@ -1449,14 +1143,13 @@ class _SaleSummaryState extends State<SaleSummary> {
                           Navigator.push(
                             context,
                             MaterialPageRoute(
-                              builder:
-                                  (context) => SaleForm(
-                                    tenantClient: widget.tenantClient,
-                                    initialCustomerId: widget.customerId,
-                                    initialCustomer: widget.customerName,
-                                    initialSalesman: widget.salesman,
-                                    ticketItems: widget.ticketItems,
-                                  ),
+                              builder: (context) => SaleForm(
+                                tenantClient: widget.tenantClient,
+                                initialCustomerId: widget.customerId,
+                                initialCustomer: widget.customerName,
+                                initialSalesman: widget.salesman,
+                                ticketItems: widget.ticketItems,
+                              ),
                             ),
                           );
                         },
@@ -1474,8 +1167,7 @@ class _SaleSummaryState extends State<SaleSummary> {
                             borderRadius: BorderRadius.circular(12),
                           ),
                         ),
-                        onPressed:
-                            isProcessing ? null : () => createTicket(context),
+                        onPressed: isProcessing ? null : () => createTicket(context),
                         child: const Text('Tạo Phiếu'),
                       ),
                     ),
@@ -1488,7 +1180,9 @@ class _SaleSummaryState extends State<SaleSummary> {
             Container(
               color: Colors.black.withOpacity(0.5),
               child: const Center(
-                child: CircularProgressIndicator(color: Colors.white),
+                child: CircularProgressIndicator(
+                  color: Colors.white,
+                ),
               ),
             ),
         ],

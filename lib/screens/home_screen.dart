@@ -106,7 +106,6 @@ class _HomeScreenState extends State<HomeScreen> {
     await _initializeNotifications();
   }
 
-
   void _startBackgroundSync() {
     // Start background cache sync
     GlobalCacheManager().startBackgroundSync(widget.tenantClient);

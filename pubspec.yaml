@@ -37,6 +37,7 @@ dependencies:
   google_mlkit_text_recognition: ^0.15.0
   pdf: ^3.11.3
   printing: ^5.14.2
+  hive_flutter: ^1.1.0
 
 dependency_overrides:
 

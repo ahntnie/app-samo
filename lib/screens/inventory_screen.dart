@@ -15,43 +15,27 @@ import '../helpers/global_cache_manager.dart';
 
 // Backward compatibility alias
 class CacheUtil {
-  static Map<String, String> get productNameCache =>
-      GlobalCacheManager().productNameCache;
-  static Map<String, String> get warehouseNameCache =>
-      GlobalCacheManager().warehouseNameCache;
-  static Map<String, String> get supplierNameCache =>
-      GlobalCacheManager().supplierNameCache;
-  static Map<String, String> get fixerNameCache =>
-      GlobalCacheManager().fixerNameCache;
-
-  static void cacheProductName(String id, String name) =>
-      GlobalCacheManager().cacheProductName(id, name);
-  static void cacheWarehouseName(String id, String name) =>
-      GlobalCacheManager().cacheWarehouseName(id, name);
-  static void cacheSupplierName(String id, String name) =>
-      GlobalCacheManager().cacheSupplierName(id, name);
-  static void cacheFixerName(String id, String name) =>
-      GlobalCacheManager().cacheFixerName(id, name);
-
-  static String getProductName(String? id) =>
-      GlobalCacheManager().getProductName(id);
-  static String getWarehouseName(String? id) =>
-      GlobalCacheManager().getWarehouseName(id);
-  static String getSupplierName(String? id) =>
-      GlobalCacheManager().getSupplierName(id);
-  static String getFixerName(String? id) =>
-      GlobalCacheManager().getFixerName(id);
+  static Map<String, String> get productNameCache => GlobalCacheManager().productNameCache;
+  static Map<String, String> get warehouseNameCache => GlobalCacheManager().warehouseNameCache;
+  static Map<String, String> get supplierNameCache => GlobalCacheManager().supplierNameCache;
+  static Map<String, String> get fixerNameCache => GlobalCacheManager().fixerNameCache;
+  
+  static void cacheProductName(String id, String name) => GlobalCacheManager().cacheProductName(id, name);
+  static void cacheWarehouseName(String id, String name) => GlobalCacheManager().cacheWarehouseName(id, name);
+  static void cacheSupplierName(String id, String name) => GlobalCacheManager().cacheSupplierName(id, name);
+  static void cacheFixerName(String id, String name) => GlobalCacheManager().cacheFixerName(id, name);
+  
+  static String getProductName(String? id) => GlobalCacheManager().getProductName(id);
+  static String getWarehouseName(String? id) => GlobalCacheManager().getWarehouseName(id);
+  static String getSupplierName(String? id) => GlobalCacheManager().getSupplierName(id);
+  static String getFixerName(String? id) => GlobalCacheManager().getFixerName(id);
 }
 
 class InventoryScreen extends StatefulWidget {
   final List<String> permissions;
   final SupabaseClient tenantClient;
 
-  const InventoryScreen({
-    super.key,
-    required this.permissions,
-    required this.tenantClient,
-  });
+  const InventoryScreen({super.key, required this.permissions, required this.tenantClient});
 
   @override
   State<InventoryScreen> createState() => _InventoryScreenState();
@@ -78,7 +62,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
   Map<int, bool> isEditingNote = {};
   Map<int, TextEditingController> noteControllers = {};
-
+  
   // Lưu lựa chọn mặc định
   String _defaultPrintType = 'a4'; // 'a4' hoặc 'thermal'
   int _defaultLabelsPerRow = 1; // 1, 2, hoặc 3
@@ -88,12 +72,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
   void initState() {
     super.initState();
     _loadPrintSettings();
-    _loadPrintSettings();
     _fetchInventoryData();
 
     _scrollController.addListener(() {
-      if (_scrollController.position.pixels >=
-              _scrollController.position.maxScrollExtent - 200 &&
+      if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200 &&
           !isLoadingMore &&
           hasMoreData &&
           searchController.text.isEmpty &&
@@ -105,7 +87,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
     searchController.addListener(_onSearchChanged);
   }
-
+  
   Future<void> _loadPrintSettings() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -118,12 +100,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
       // Ignore errors, use defaults
     }
   }
-
-  Future<void> _savePrintSettings(
-    String printType,
-    int labelsPerRow,
-    int labelHeight,
-  ) async {
+  
+  Future<void> _savePrintSettings(String printType, int labelsPerRow, int labelHeight) async {
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('default_print_type', printType);
@@ -179,12 +157,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
       ]);
 
       // Build warehouse options từ cache
-
-      // Build warehouse options từ cache
       List<String> warehouseNames = ['Tất cả'];
       warehouseNames.addAll(cacheManager.warehouseNameCache.values);
-      warehouseNames.addAll(cacheManager.warehouseNameCache.values);
-
+      
       setState(() {
         warehouseOptions = warehouseNames;
       });
@@ -211,14 +186,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
       final response = await widget.tenantClient
           .from('products')
-          .select(
-            'id, product_id, imei, status, import_date, return_date, fix_price, send_fix_date, transport_fee, transporter, send_transfer_date, import_transfer_date, sale_price, customer_price, transporter_price, sale_date, saleman, note, import_price, import_currency, warehouse_id, customer, cost_price, supplier_id',
-          )
+          .select('id, product_id, imei, status, import_date, return_date, fix_price, send_fix_date, transport_fee, transporter, send_transfer_date, import_transfer_date, sale_price, customer_price, transporter_price, sale_date, saleman, note, import_price, import_currency, warehouse_id, customer, cost_price, supplier_id')
           .range(start, end);
 
       setState(() {
-        List<Map<String, dynamic>> newData =
-            response.cast<Map<String, dynamic>>();
+        List<Map<String, dynamic>> newData = response.cast<Map<String, dynamic>>();
         inventoryData.addAll(newData);
         filteredInventoryData = _filterInventory(inventoryData);
 
@@ -241,9 +213,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   Future<void> _fetchFilteredData() async {
-    if (searchController.text.isEmpty &&
-        selectedFilter == 'Tất cả' &&
-        selectedWarehouse == 'Tất cả') {
+    if (searchController.text.isEmpty && selectedFilter == 'Tất cả' && selectedWarehouse == 'Tất cả') {
       if (inventoryData.isEmpty) {
         await _fetchInventoryData();
       } else {
@@ -259,12 +229,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
     try {
       var query = widget.tenantClient
           .from('products')
-          .select(
-            'id, product_id, imei, status, import_date, return_date, fix_price, send_fix_date, transport_fee, transporter, send_transfer_date, import_transfer_date, sale_price, customer_price, transporter_price, sale_date, saleman, note, import_price, import_currency, warehouse_id, customer, cost_price, supplier_id',
-          );
+          .select('id, product_id, imei, status, import_date, return_date, fix_price, send_fix_date, transport_fee, transporter, send_transfer_date, import_transfer_date, sale_price, customer_price, transporter_price, sale_date, saleman, note, import_price, import_currency, warehouse_id, customer, cost_price, supplier_id');
 
       final queryText = searchController.text.toLowerCase();
-
+      
       // Tìm kiếm theo tên sản phẩm từ cache
       List<String> matchingProductIds = [];
       if (queryText.isNotEmpty) {
@@ -280,12 +248,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
         // Kết hợp tìm kiếm theo IMEI, note, hoặc product_id (từ tên sản phẩm)
         if (matchingProductIds.isNotEmpty) {
           // Nếu tìm thấy sản phẩm theo tên, thêm điều kiện tìm theo product_id
-          final productIdConditions = matchingProductIds
-              .map((id) => 'product_id.eq.$id')
-              .join(',');
-          query = query.or(
-            'imei.ilike.%$queryText%,note.ilike.%$queryText%,$productIdConditions',
-          );
+          final productIdConditions = matchingProductIds.map((id) => 'product_id.eq.$id').join(',');
+          query = query.or('imei.ilike.%$queryText%,note.ilike.%$queryText%,$productIdConditions');
         } else {
           // Chỉ tìm theo IMEI và note nếu không tìm thấy tên sản phẩm
           query = query.or('imei.ilike.%$queryText%,note.ilike.%$queryText%');
@@ -300,21 +264,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
       }
 
       if (selectedWarehouse != 'Tất cả') {
-        final warehouseId =
-            CacheUtil.warehouseNameCache.entries
-                .firstWhere(
-                  (entry) => entry.value == selectedWarehouse,
-                  orElse: () => MapEntry('', ''),
-                )
-                .key;
+        final warehouseId = CacheUtil.warehouseNameCache.entries
+            .firstWhere((entry) => entry.value == selectedWarehouse, orElse: () => MapEntry('', ''))
+            .key;
         if (warehouseId.isNotEmpty) {
           query = query.eq('warehouse_id', warehouseId);
         }
       }
 
       final response = await query;
-      List<Map<String, dynamic>> allData =
-          response.cast<Map<String, dynamic>>();
+      List<Map<String, dynamic>> allData = response.cast<Map<String, dynamic>>();
 
       setState(() {
         filteredInventoryData = _filterInventory(allData);
@@ -331,26 +290,25 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   void _updateFilterOptions() {
-    final uniqueStatuses =
-        inventoryData
-            .map((e) => e['status'] as String?)
-            .where((e) => e != null && e.isNotEmpty)
-            .cast<String>()
-            .toSet()
-            .toList();
+    final uniqueStatuses = inventoryData
+        .map((e) => e['status'] as String?)
+        .where((e) => e != null && e.isNotEmpty)
+        .cast<String>()
+        .toSet()
+        .toList();
 
     // ✅ Thêm các trạng thái chuẩn vào danh sách filter (CHÍNH XÁC theo DB)
     final standardStatuses = <String>[
       'Tồn kho',
-      'Đang sửa', // ✅ Chữ hoa D
-      'đang vận chuyển', // ✅ Chữ thường d (khớp với DB)
+      'Đang sửa',           // ✅ Chữ hoa D
+      'đang vận chuyển',    // ✅ Chữ thường d (khớp với DB)
       'Đã bán',
     ];
-
+    
     // Kết hợp: giữ các trạng thái chuẩn + thêm các trạng thái khác từ DB (nếu có)
     final allStatuses = <String>{...standardStatuses};
     allStatuses.addAll(uniqueStatuses);
-
+    
     setState(() {
       filterOptions = [
         'Tất cả',
@@ -362,24 +320,17 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   List<Map<String, dynamic>> _filterInventory(List<Map<String, dynamic>> data) {
-    var filtered =
-        data.where((item) {
-          if (item['product_id'] == null || item['imei'] == null) {
-            return false;
-          }
-          return true;
-        }).toList();
+    var filtered = data.where((item) {
+      if (item['product_id'] == null || item['imei'] == null) {
+        return false;
+      }
+      return true;
+    }).toList();
 
     if (selectedFilter == 'Tồn kho mới nhất') {
       filtered.sort((a, b) {
-        final dateA =
-            a['import_date'] != null
-                ? DateTime.tryParse(a['import_date'])
-                : null;
-        final dateB =
-            b['import_date'] != null
-                ? DateTime.tryParse(b['import_date'])
-                : null;
+        final dateA = a['import_date'] != null ? DateTime.tryParse(a['import_date']) : null;
+        final dateB = b['import_date'] != null ? DateTime.tryParse(b['import_date']) : null;
         if (dateA == null && dateB == null) return 0;
         if (dateA == null) return 1;
         if (dateB == null) return -1;
@@ -387,14 +338,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
       });
     } else if (selectedFilter == 'Tồn kho lâu nhất') {
       filtered.sort((a, b) {
-        final dateA =
-            a['import_date'] != null
-                ? DateTime.tryParse(a['import_date'])
-                : null;
-        final dateB =
-            b['import_date'] != null
-                ? DateTime.tryParse(b['import_date'])
-                : null;
+        final dateA = a['import_date'] != null ? DateTime.tryParse(a['import_date']) : null;
+        final dateB = b['import_date'] != null ? DateTime.tryParse(b['import_date']) : null;
         if (dateA == null && dateB == null) return 0;
         if (dateA == null) return 1;
         if (dateB == null) return -1;
@@ -417,19 +362,15 @@ class _InventoryScreenState extends State<InventoryScreen> {
     return currentDate.difference(importDateParsed).inDays.abs();
   }
 
-  Future<String?> _fetchCustomerFromSaleOrders(
-    String productId,
-    String imei,
-  ) async {
+  Future<String?> _fetchCustomerFromSaleOrders(String productId, String imei) async {
     try {
       final productName = CacheUtil.getProductName(productId);
-      final response =
-          await widget.tenantClient
-              .from('sale_orders')
-              .select('customer, imei, product')
-              .ilike('product', '%$productName%')
-              .ilike('imei', '%$imei%')
-              .maybeSingle();
+      final response = await widget.tenantClient
+          .from('sale_orders')
+          .select('customer, imei, product')
+          .ilike('product', '%$productName%')
+          .ilike('imei', '%$imei%')
+          .maybeSingle();
 
       return response?['customer']?.toString();
     } catch (e) {
@@ -437,19 +378,15 @@ class _InventoryScreenState extends State<InventoryScreen> {
     }
   }
 
-  Future<String?> _fetchSupplierFromImportOrders(
-    String productId,
-    String imei,
-  ) async {
+  Future<String?> _fetchSupplierFromImportOrders(String productId, String imei) async {
     try {
       final productName = CacheUtil.getProductName(productId);
-      final response =
-          await widget.tenantClient
-              .from('import_orders')
-              .select('supplier, imei, product')
-              .ilike('product', '%$productName%')
-              .ilike('imei', '%$imei%')
-              .maybeSingle();
+      final response = await widget.tenantClient
+          .from('import_orders')
+          .select('supplier, imei, product')
+          .ilike('product', '%$productName%')
+          .ilike('imei', '%$imei%')
+          .maybeSingle();
 
       return response?['supplier']?.toString();
     } catch (e) {
@@ -457,21 +394,14 @@ class _InventoryScreenState extends State<InventoryScreen> {
     }
   }
 
-  Future<Map<String, String?>> _fetchCustomersForItems(
-    List<Map<String, dynamic>> items,
-  ) async {
+  Future<Map<String, String?>> _fetchCustomersForItems(List<Map<String, dynamic>> items) async {
     if (!widget.permissions.contains('view_customer')) return {};
 
     Map<String, String?> customerMap = {};
     const batchSize = 50;
     final batches = <List<Map<String, dynamic>>>[];
     for (var i = 0; i < items.length; i += batchSize) {
-      batches.add(
-        items.sublist(
-          i,
-          i + batchSize > items.length ? items.length : i + batchSize,
-        ),
-      );
+      batches.add(items.sublist(i, i + batchSize > items.length ? items.length : i + batchSize));
     }
 
     for (var batch in batches) {
@@ -480,9 +410,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
           final productId = item['product_id']?.toString() ?? '';
           final imei = item['imei']?.toString() ?? '';
           final cacheKey = '$productId|$imei';
-          final customer =
-              item['customer']?.toString() ??
-              await _fetchCustomerFromSaleOrders(productId, imei);
+          final customer = item['customer']?.toString() ?? await _fetchCustomerFromSaleOrders(productId, imei);
           customerMap[cacheKey] = customer;
         }
       } catch (e) {}
@@ -498,21 +426,14 @@ class _InventoryScreenState extends State<InventoryScreen> {
     return customerMap;
   }
 
-  Future<Map<String, String?>> _fetchSuppliersForItems(
-    List<Map<String, dynamic>> items,
-  ) async {
+  Future<Map<String, String?>> _fetchSuppliersForItems(List<Map<String, dynamic>> items) async {
     if (!widget.permissions.contains('view_supplier')) return {};
 
     Map<String, String?> supplierMap = {};
     const batchSize = 50;
     final batches = <List<Map<String, dynamic>>>[];
     for (var i = 0; i < items.length; i += batchSize) {
-      batches.add(
-        items.sublist(
-          i,
-          i + batchSize > items.length ? items.length : i + batchSize,
-        ),
-      );
+      batches.add(items.sublist(i, i + batchSize > items.length ? items.length : i + batchSize));
     }
 
     for (var batch in batches) {
@@ -521,10 +442,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
           final productId = item['product_id']?.toString() ?? '';
           final imei = item['imei']?.toString() ?? '';
           final cacheKey = '$productId|$imei';
-          final supplier = await _fetchSupplierFromImportOrders(
-            productId,
-            imei,
-          );
+          final supplier = await _fetchSupplierFromImportOrders(productId, imei);
           supplierMap[cacheKey] = supplier;
         }
       } catch (e) {}
@@ -548,18 +466,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
           .eq('id', productId);
 
       setState(() {
-        final index = inventoryData.indexWhere(
-          (item) => item['id'] == productId,
-        );
+        final index = inventoryData.indexWhere((item) => item['id'] == productId);
         if (index != -1) {
           inventoryData[index]['note'] = newNote;
           filteredInventoryData = _filterInventory(inventoryData);
         }
       });
     } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Lỗi khi cập nhật ghi chú: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Lỗi khi cập nhật ghi chú: $e')),
+      );
     }
   }
 
@@ -567,17 +483,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
     // Hiển thị dialog đơn giản với option ghi nhớ
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
-      builder:
-          (context) => AlertDialog(
-            title: const Text('Cài đặt in tem'),
-            content: SingleChildScrollView(
-              child: _PrintSettingsDialog(
-                defaultPrintType: _defaultPrintType,
-                defaultLabelsPerRow: _defaultLabelsPerRow,
-                defaultLabelHeight: _defaultLabelHeight,
-              ),
-            ),
+      builder: (context) => AlertDialog(
+        title: const Text('Cài đặt in tem'),
+        content: SingleChildScrollView(
+          child: _PrintSettingsDialog(
+            defaultPrintType: _defaultPrintType,
+            defaultLabelsPerRow: _defaultLabelsPerRow,
+            defaultLabelHeight: _defaultLabelHeight,
           ),
+        ),
+      ),
     );
 
     if (result == null) return;
@@ -604,7 +519,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
           .select('id, product_id, imei, status');
 
       final queryText = searchController.text.toLowerCase();
-
+      
       // Tìm kiếm theo tên sản phẩm từ cache
       List<String> matchingProductIds = [];
       if (queryText.isNotEmpty) {
@@ -617,12 +532,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
       if (queryText.isNotEmpty) {
         if (matchingProductIds.isNotEmpty) {
-          final productIdConditions = matchingProductIds
-              .map((id) => 'product_id.eq.$id')
-              .join(',');
-          query = query.or(
-            'imei.ilike.%$queryText%,note.ilike.%$queryText%,$productIdConditions',
-          );
+          final productIdConditions = matchingProductIds.map((id) => 'product_id.eq.$id').join(',');
+          query = query.or('imei.ilike.%$queryText%,note.ilike.%$queryText%,$productIdConditions');
         } else {
           query = query.or('imei.ilike.%$queryText%,note.ilike.%$queryText%');
         }
@@ -636,36 +547,31 @@ class _InventoryScreenState extends State<InventoryScreen> {
       }
 
       if (selectedWarehouse != 'Tất cả') {
-        final warehouseId =
-            CacheUtil.warehouseNameCache.entries
-                .firstWhere(
-                  (entry) => entry.value == selectedWarehouse,
-                  orElse: () => MapEntry('', ''),
-                )
-                .key;
+        final warehouseId = CacheUtil.warehouseNameCache.entries
+            .firstWhere((entry) => entry.value == selectedWarehouse, orElse: () => MapEntry('', ''))
+            .key;
         if (warehouseId.isNotEmpty) {
           query = query.eq('warehouse_id', warehouseId);
         }
       }
 
       final response = await query;
-      List<Map<String, dynamic>> allItems =
-          response.cast<Map<String, dynamic>>();
+      List<Map<String, dynamic>> allItems = response.cast<Map<String, dynamic>>();
       allItems = _filterInventory(allItems);
 
       if (allItems.isEmpty) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Không có dữ liệu để in')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Không có dữ liệu để in')),
+        );
         return;
       }
 
       // Tạo PDF với tem nhãn
       final pdf = pw.Document();
-
+      
       // Tạo barcode generator
       final barcodeGen = Barcode.code128();
-
+      
       if (printType == 'thermal') {
         // In tem nhiệt - hỗ trợ nhiều layout
         if (labelsPerRow == 1) {
@@ -674,49 +580,39 @@ class _InventoryScreenState extends State<InventoryScreen> {
             pdf.addPage(
               pw.Page(
                 pageFormat: PdfPageFormat(
-                  40 * PdfPageFormat.mm, // Width: 40mm
-                  labelHeight * PdfPageFormat.mm, // Height: tùy chọn
+                  40 * PdfPageFormat.mm,  // Width: 40mm
+                  labelHeight * PdfPageFormat.mm,  // Height: tùy chọn
                   marginAll: 1 * PdfPageFormat.mm,
                 ),
-                build:
-                    (context) =>
-                        _buildThermalLabel(item, barcodeGen, labelHeight),
+                build: (context) => _buildThermalLabel(item, barcodeGen, labelHeight),
               ),
             );
           }
         } else {
           // Layout 2 hoặc 3 tem/hàng (cuộn rộng)
-          final pageWidth =
-              labelsPerRow == 2
-                  ? 85 *
-                      PdfPageFormat
-                          .mm // 2 tem: 40*2 + gap 5mm
-                  : 125 * PdfPageFormat.mm; // 3 tem: 40*3 + gap 5mm*2
-
+          final pageWidth = labelsPerRow == 2 
+              ? 85 * PdfPageFormat.mm  // 2 tem: 40*2 + gap 5mm
+              : 125 * PdfPageFormat.mm; // 3 tem: 40*3 + gap 5mm*2
+          
           for (int i = 0; i < allItems.length; i += labelsPerRow) {
             final rowItems = allItems.skip(i).take(labelsPerRow).toList();
-
+            
             pdf.addPage(
               pw.Page(
                 pageFormat: PdfPageFormat(
                   pageWidth,
-                  labelHeight * PdfPageFormat.mm, // Height: tùy chọn
+                  labelHeight * PdfPageFormat.mm,  // Height: tùy chọn
                   marginAll: 1 * PdfPageFormat.mm,
                 ),
                 build: (context) {
                   return pw.Row(
                     mainAxisAlignment: pw.MainAxisAlignment.spaceEvenly,
-                    children:
-                        rowItems.map((item) {
-                          return pw.Container(
-                            width: 38 * PdfPageFormat.mm, // 40mm - margin
-                            child: _buildThermalLabel(
-                              item,
-                              barcodeGen,
-                              labelHeight,
-                            ),
-                          );
-                        }).toList(),
+                    children: rowItems.map((item) {
+                      return pw.Container(
+                        width: 38 * PdfPageFormat.mm, // 40mm - margin
+                        child: _buildThermalLabel(item, barcodeGen, labelHeight),
+                      );
+                    }).toList(),
                   );
                 },
               ),
@@ -728,7 +624,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
         const itemsPerPage = 4;
         for (int i = 0; i < allItems.length; i += itemsPerPage) {
           final pageItems = allItems.skip(i).take(itemsPerPage).toList();
-
+          
           pdf.addPage(
             pw.Page(
               pageFormat: PdfPageFormat.a4,
@@ -740,15 +636,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     pw.Row(
                       crossAxisAlignment: pw.CrossAxisAlignment.start,
                       children: [
-                        if (pageItems.isNotEmpty)
-                          pw.Expanded(
-                            child: _buildA4Label(pageItems[0], barcodeGen),
-                          ),
+                        if (pageItems.isNotEmpty) 
+                          pw.Expanded(child: _buildA4Label(pageItems[0], barcodeGen)),
                         pw.SizedBox(width: 10),
-                        if (pageItems.length > 1)
-                          pw.Expanded(
-                            child: _buildA4Label(pageItems[1], barcodeGen),
-                          )
+                        if (pageItems.length > 1) 
+                          pw.Expanded(child: _buildA4Label(pageItems[1], barcodeGen))
                         else
                           pw.Expanded(child: pw.Container()),
                       ],
@@ -758,17 +650,13 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     pw.Row(
                       crossAxisAlignment: pw.CrossAxisAlignment.start,
                       children: [
-                        if (pageItems.length > 2)
-                          pw.Expanded(
-                            child: _buildA4Label(pageItems[2], barcodeGen),
-                          )
+                        if (pageItems.length > 2) 
+                          pw.Expanded(child: _buildA4Label(pageItems[2], barcodeGen))
                         else
                           pw.Expanded(child: pw.Container()),
                         pw.SizedBox(width: 10),
-                        if (pageItems.length > 3)
-                          pw.Expanded(
-                            child: _buildA4Label(pageItems[3], barcodeGen),
-                          )
+                        if (pageItems.length > 3) 
+                          pw.Expanded(child: _buildA4Label(pageItems[3], barcodeGen))
                         else
                           pw.Expanded(child: pw.Container()),
                       ],
@@ -786,19 +674,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
         onLayout: (format) async => pdf.save(),
         name: 'Tem_Nhan_IMEI_${DateTime.now().millisecondsSinceEpoch}.pdf',
       );
+
     } catch (e) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Lỗi khi in tem nhãn: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Lỗi khi in tem nhãn: $e')),
+      );
     }
   }
 
   // Tem cho máy in nhiệt (tự động điều chỉnh theo chiều cao)
-  pw.Widget _buildThermalLabel(
-    Map<String, dynamic> item,
-    Barcode barcodeGen,
-    int labelHeight,
-  ) {
+  pw.Widget _buildThermalLabel(Map<String, dynamic> item, Barcode barcodeGen, int labelHeight) {
     final productId = item['product_id']?.toString() ?? '';
     final imei = item['imei']?.toString() ?? '';
     final productName = CacheUtil.getProductName(productId);
@@ -808,7 +693,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     double imeiFontSize;
     double barcodeHeight;
     int maxLines;
-
+    
     if (labelHeight <= 20) {
       // Tem 20mm: rất nhỏ, chỉ hiển thị tối thiểu
       titleFontSize = 5;
@@ -872,7 +757,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
           // Số IMEI
           pw.Text(
             imei,
-            style: pw.TextStyle(fontSize: imeiFontSize),
+            style: pw.TextStyle(
+              fontSize: imeiFontSize,
+            ),
             textAlign: pw.TextAlign.center,
           ),
         ],
@@ -898,7 +785,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
           // Tên sản phẩm
           pw.Text(
             productName,
-            style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold),
+            style: pw.TextStyle(
+              fontSize: 12,
+              fontWeight: pw.FontWeight.bold,
+            ),
             textAlign: pw.TextAlign.center,
             maxLines: 2,
             overflow: pw.TextOverflow.clip,
@@ -917,13 +807,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
           // Số IMEI
           pw.Text(
             imei,
-            style: const pw.TextStyle(fontSize: 10),
+            style: const pw.TextStyle(
+              fontSize: 10,
+            ),
             textAlign: pw.TextAlign.center,
           ),
         ],
       ),
     );
   }
+
 
   Future<void> _exportToExcel() async {
     if (isExporting) return;
@@ -935,20 +828,19 @@ class _InventoryScreenState extends State<InventoryScreen> {
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder:
-          (context) => AlertDialog(
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: const [
-                CircularProgressIndicator(),
-                SizedBox(height: 16),
-                Text(
-                  'Dữ liệu đang được xuất ra Excel. Vui lòng chờ tới khi hoàn tất và không đóng ứng dụng.',
-                  textAlign: TextAlign.center,
-                ),
-              ],
+      builder: (context) => AlertDialog(
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: const [
+            CircularProgressIndicator(),
+            SizedBox(height: 16),
+            Text(
+              'Dữ liệu đang được xuất ra Excel. Vui lòng chờ tới khi hoàn tất và không đóng ứng dụng.',
+              textAlign: TextAlign.center,
             ),
-          ),
+          ],
+        ),
+      ),
     );
 
     await Future.delayed(Duration.zero);
@@ -959,9 +851,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
         if (mounted) {
           Navigator.pop(context);
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Cần quyền lưu trữ để xuất file Excel'),
-            ),
+            const SnackBar(content: Text('Cần quyền lưu trữ để xuất file Excel')),
           );
         }
         setState(() {
@@ -972,12 +862,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
       var query = widget.tenantClient
           .from('products')
-          .select(
-            'id, product_id, imei, status, import_date, return_date, fix_price, send_fix_date, transport_fee, transporter, send_transfer_date, import_transfer_date, sale_price, customer_price, transporter_price, sale_date, saleman, note, import_price, import_currency, warehouse_id, customer, cost_price, supplier_id',
-          );
+          .select('id, product_id, imei, status, import_date, return_date, fix_price, send_fix_date, transport_fee, transporter, send_transfer_date, import_transfer_date, sale_price, customer_price, transporter_price, sale_date, saleman, note, import_price, import_currency, warehouse_id, customer, cost_price, supplier_id');
 
       final queryText = searchController.text.toLowerCase();
-
+      
       // Tìm kiếm theo tên sản phẩm từ cache
       List<String> matchingProductIds = [];
       if (queryText.isNotEmpty) {
@@ -993,12 +881,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
         // Kết hợp tìm kiếm theo IMEI, note, hoặc product_id (từ tên sản phẩm)
         if (matchingProductIds.isNotEmpty) {
           // Nếu tìm thấy sản phẩm theo tên, thêm điều kiện tìm theo product_id
-          final productIdConditions = matchingProductIds
-              .map((id) => 'product_id.eq.$id')
-              .join(',');
-          query = query.or(
-            'imei.ilike.%$queryText%,note.ilike.%$queryText%,$productIdConditions',
-          );
+          final productIdConditions = matchingProductIds.map((id) => 'product_id.eq.$id').join(',');
+          query = query.or('imei.ilike.%$queryText%,note.ilike.%$queryText%,$productIdConditions');
         } else {
           // Chỉ tìm theo IMEI và note nếu không tìm thấy tên sản phẩm
           query = query.or('imei.ilike.%$queryText%,note.ilike.%$queryText%');
@@ -1013,21 +897,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
       }
 
       if (selectedWarehouse != 'Tất cả') {
-        final warehouseId =
-            CacheUtil.warehouseNameCache.entries
-                .firstWhere(
-                  (entry) => entry.value == selectedWarehouse,
-                  orElse: () => MapEntry('', ''),
-                )
-                .key;
+        final warehouseId = CacheUtil.warehouseNameCache.entries
+            .firstWhere((entry) => entry.value == selectedWarehouse, orElse: () => MapEntry('', ''))
+            .key;
         if (warehouseId.isNotEmpty) {
           query = query.eq('warehouse_id', warehouseId);
         }
       }
 
       final response = await query;
-      List<Map<String, dynamic>> allItems =
-          response.cast<Map<String, dynamic>>();
+      List<Map<String, dynamic>> allItems = response.cast<Map<String, dynamic>>();
 
       allItems = _filterInventory(allItems);
 
@@ -1044,12 +923,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
         return;
       }
 
-      Map<String, String?> customerMap = await _fetchCustomersForItems(
-        allItems,
-      );
-      Map<String, String?> supplierMap = await _fetchSuppliersForItems(
-        allItems,
-      );
+      Map<String, String?> customerMap = await _fetchCustomersForItems(allItems);
+      Map<String, String?> supplierMap = await _fetchSuppliersForItems(allItems);
 
       var excel = Excel.createExcel();
       Sheet sheet = excel['TonKho']; // ✅ Tạo sheet mới trước
@@ -1059,12 +934,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
         TextCellValue('Số thứ tự'),
         TextCellValue('Tên sản phẩm'),
         TextCellValue('IMEI'),
-        if (widget.permissions.contains('view_import_price'))
-          TextCellValue('Giá nhập'),
-        if (widget.permissions.contains('view_import_price'))
-          TextCellValue('Đơn vị tiền nhập'),
-        if (widget.permissions.contains('view_cost_price'))
-          TextCellValue('Giá vốn'),
+        if (widget.permissions.contains('view_import_price')) TextCellValue('Giá nhập'),
+        if (widget.permissions.contains('view_import_price')) TextCellValue('Đơn vị tiền nhập'),
+        if (widget.permissions.contains('view_cost_price')) TextCellValue('Giá vốn'),
         TextCellValue('Ngày gửi sửa'),
         TextCellValue('Trạng thái'),
         TextCellValue('Kho'),
@@ -1075,15 +947,12 @@ class _InventoryScreenState extends State<InventoryScreen> {
         TextCellValue('Đơn vị vận chuyển'),
         TextCellValue('Ngày chuyển kho'),
         TextCellValue('Ngày nhập kho'),
-        if (widget.permissions.contains('view_sale_price'))
-          TextCellValue('Giá bán'),
-        if (widget.permissions.contains('view_customer'))
-          TextCellValue('Khách hàng'),
+        if (widget.permissions.contains('view_sale_price')) TextCellValue('Giá bán'),
+        if (widget.permissions.contains('view_customer')) TextCellValue('Khách hàng'),
         TextCellValue('Tiền cọc'),
         TextCellValue('Tiền COD'),
         TextCellValue('Ngày bán'),
-        if (widget.permissions.contains('view_supplier'))
-          TextCellValue('Nhà cung cấp'),
+        if (widget.permissions.contains('view_supplier')) TextCellValue('Nhà cung cấp'),
         TextCellValue('Ghi chú'),
       ];
 
@@ -1102,17 +971,12 @@ class _InventoryScreenState extends State<InventoryScreen> {
           TextCellValue((i + 1).toString()),
           TextCellValue(CacheUtil.getProductName(productId)),
           TextCellValue(imei),
-          if (widget.permissions.contains('view_import_price'))
-            TextCellValue(item['import_price']?.toString() ?? ''),
-          if (widget.permissions.contains('view_import_price'))
-            TextCellValue(item['import_currency']?.toString() ?? ''),
-          if (widget.permissions.contains('view_cost_price'))
-            TextCellValue(item['cost_price']?.toString() ?? ''),
+          if (widget.permissions.contains('view_import_price')) TextCellValue(item['import_price']?.toString() ?? ''),
+          if (widget.permissions.contains('view_import_price')) TextCellValue(item['import_currency']?.toString() ?? ''),
+          if (widget.permissions.contains('view_cost_price')) TextCellValue(item['cost_price']?.toString() ?? ''),
           TextCellValue(item['send_fix_date']?.toString() ?? ''),
           TextCellValue(item['status']?.toString() ?? ''),
-          TextCellValue(
-            CacheUtil.getWarehouseName(item['warehouse_id']?.toString()),
-          ),
+          TextCellValue(CacheUtil.getWarehouseName(item['warehouse_id']?.toString())),
           TextCellValue(item['import_date']?.toString() ?? ''),
           TextCellValue(item['return_date']?.toString() ?? ''),
           TextCellValue(item['fix_price']?.toString() ?? ''),
@@ -1120,15 +984,12 @@ class _InventoryScreenState extends State<InventoryScreen> {
           TextCellValue(item['transporter']?.toString() ?? ''),
           TextCellValue(item['send_transfer_date']?.toString() ?? ''),
           TextCellValue(item['import_transfer_date']?.toString() ?? ''),
-          if (widget.permissions.contains('view_sale_price'))
-            TextCellValue(item['sale_price']?.toString() ?? ''),
-          if (widget.permissions.contains('view_customer'))
-            TextCellValue(customer ?? ''),
+          if (widget.permissions.contains('view_sale_price')) TextCellValue(item['sale_price']?.toString() ?? ''),
+          if (widget.permissions.contains('view_customer')) TextCellValue(customer ?? ''),
           TextCellValue(item['customer_price']?.toString() ?? ''),
           TextCellValue(item['transporter_price']?.toString() ?? ''),
           TextCellValue(item['sale_date']?.toString() ?? ''),
-          if (widget.permissions.contains('view_supplier'))
-            TextCellValue(supplier ?? ''),
+          if (widget.permissions.contains('view_supplier')) TextCellValue(supplier ?? ''),
           TextCellValue(item['note']?.toString() ?? ''),
         ];
 
@@ -1147,8 +1008,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
       final now = DateTime.now();
       final filterName = selectedFilter.replaceAll(' ', '');
-      final fileName =
-          'Báo Cáo Tồn Kho $filterName ${now.day}_${now.month}_${now.year} ${now.hour}_${now.minute}_${now.second}.xlsx';
+      final fileName = 'Báo Cáo Tồn Kho $filterName ${now.day}_${now.month}_${now.year} ${now.hour}_${now.minute}_${now.second}.xlsx';
       final filePath = '${downloadsDir.path}/$fileName';
       final file = File(filePath);
 
@@ -1167,20 +1027,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
         final openResult = await OpenFile.open(filePath);
         if (openResult.type != ResultType.done) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                'Không thể mở file. File đã được lưu tại: $filePath',
-              ),
-            ),
+            SnackBar(content: Text('Không thể mở file. File đã được lưu tại: $filePath')),
           );
         }
       }
     } catch (e) {
       if (mounted) {
         Navigator.pop(context);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Lỗi khi xuất file Excel: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Lỗi khi xuất file Excel: $e')),
+        );
       }
     } finally {
       setState(() {
@@ -1198,8 +1054,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
     if (widget.permissions.contains('view_supplier')) {
       final supplierId = product['supplier_id']?.toString();
-      supplier =
-          supplierId != null ? CacheUtil.getSupplierName(supplierId) : null;
+      supplier = supplierId != null ? CacheUtil.getSupplierName(supplierId) : null;
     }
 
     final details = <String, String?>{
@@ -1208,15 +1063,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
       'Trạng thái': product['status']?.toString(),
       'Kho': CacheUtil.getWarehouseName(product['warehouse_id']?.toString()),
       if (widget.permissions.contains('view_import_price'))
-        'Giá nhập':
-            product['import_price'] != null
-                ? '${product['import_price']} ${product['import_currency'] ?? ''}'
-                : null,
+        'Giá nhập': product['import_price'] != null ? '${product['import_price']} ${product['import_currency'] ?? ''}' : null,
       if (widget.permissions.contains('view_cost_price'))
-        'Giá vốn':
-            product['cost_price'] != null
-                ? product['cost_price'].toString()
-                : null,
+        'Giá vốn': product['cost_price'] != null ? product['cost_price'].toString() : null,
       'Ngày nhập': product['import_date']?.toString(),
       if (widget.permissions.contains('view_supplier') && supplier != null)
         'Nhà cung cấp': supplier,
@@ -1231,16 +1080,12 @@ class _InventoryScreenState extends State<InventoryScreen> {
         'Giá bán': product['sale_price']?.toString(),
       if (widget.permissions.contains('view_customer') && customer != null)
         'Khách hàng': customer,
-      'Tiền cọc':
-          product['customer_price'] != null &&
-                  (product['customer_price'] as num) > 0
-              ? product['customer_price'].toString()
-              : null,
-      'Tiền COD':
-          product['transporter_price'] != null &&
-                  (product['transporter_price'] as num) > 0
-              ? product['transporter_price'].toString()
-              : null,
+      'Tiền cọc': product['customer_price'] != null && (product['customer_price'] as num) > 0
+          ? product['customer_price'].toString()
+          : null,
+      'Tiền COD': product['transporter_price'] != null && (product['transporter_price'] as num) > 0
+          ? product['transporter_price'].toString()
+          : null,
       'Ngày bán': product['sale_date']?.toString(),
       'Nhân viên bán': product['saleman']?.toString(),
       'Ghi chú': product['note']?.toString(),
@@ -1250,84 +1095,74 @@ class _InventoryScreenState extends State<InventoryScreen> {
       isEditingNote[productId] = false;
     }
     if (!noteControllers.containsKey(productId)) {
-      noteControllers[productId] = TextEditingController(
-        text: product['note']?.toString() ?? '',
-      );
+      noteControllers[productId] = TextEditingController(text: product['note']?.toString() ?? '');
     }
 
     showDialog(
       context: context,
-      builder:
-          (context) => StatefulBuilder(
-            builder:
-                (context, setDialogState) => AlertDialog(
-                  title: const Text('Chi tiết sản phẩm'),
-                  content: SingleChildScrollView(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        ...details.entries
-                            .where(
-                              (entry) =>
-                                  entry.value != null &&
-                                  entry.value!.isNotEmpty,
-                            )
-                            .map(
-                              (entry) => Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  vertical: 4.0,
-                                ),
-                                child: Text('${entry.key}: ${entry.value}'),
-                              ),
-                            ),
-                        const SizedBox(height: 8),
-                        if (isEditingNote[productId] ?? false)
-                          TextField(
-                            controller: noteControllers[productId],
-                            decoration: const InputDecoration(
-                              labelText: 'Ghi chú',
-                              border: OutlineInputBorder(),
-                            ),
-                          ),
-                      ],
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Chi tiết sản phẩm'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                ...details.entries
+                    .where((entry) => entry.value != null && entry.value!.isNotEmpty)
+                    .map((entry) => Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 4.0),
+                          child: Text('${entry.key}: ${entry.value}'),
+                        )),
+                const SizedBox(height: 8),
+                if (isEditingNote[productId] ?? false)
+                  TextField(
+                    controller: noteControllers[productId],
+                    decoration: const InputDecoration(
+                      labelText: 'Ghi chú',
+                      border: OutlineInputBorder(),
                     ),
                   ),
-                  actions: [
-                    TextButton(
-                      onPressed: () async {
-                        if (isEditingNote[productId] ?? false) {
-                          final newNote = noteControllers[productId]!.text;
-                          await _updateNote(productId, newNote);
-                          setDialogState(() {
-                            isEditingNote[productId] = false;
-                          });
-                        } else {
-                          setDialogState(() {
-                            isEditingNote[productId] = true;
-                          });
-                        }
-                      },
-                      child: Text(
-                        (isEditingNote[productId] ?? false) ? 'Xong' : 'Sửa',
-                        style: const TextStyle(color: Colors.blue),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text('Đóng'),
-                    ),
-                  ],
-                ),
+              ],
+            ),
           ),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                if (isEditingNote[productId] ?? false) {
+                  final newNote = noteControllers[productId]!.text;
+                  await _updateNote(productId, newNote);
+                  setDialogState(() {
+                    isEditingNote[productId] = false;
+                  });
+                } else {
+                  setDialogState(() {
+                    isEditingNote[productId] = true;
+                  });
+                }
+              },
+              child: Text(
+                (isEditingNote[productId] ?? false) ? 'Xong' : 'Sửa',
+                style: const TextStyle(color: Colors.blue),
+              ),
+            ),
+            const SizedBox(width: 8),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Đóng'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     if (isLoading) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
     }
 
     if (errorMessage != null) {
@@ -1372,10 +1207,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             children: [
                               const Text(
                                 'Tình trạng',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.black54,
-                                ),
+                                style: TextStyle(fontSize: 12, color: Colors.black54),
                               ),
                               const SizedBox(height: 4),
                               DropdownButton<String>(
@@ -1383,18 +1215,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                 borderRadius: BorderRadius.circular(12),
                                 dropdownColor: Colors.white,
                                 isExpanded: true,
-                                items:
-                                    filterOptions.map((option) {
-                                      return DropdownMenuItem(
-                                        value: option,
-                                        child: Text(option),
-                                      );
-                                    }).toList(),
-                                onChanged:
-                                    (value) => setState(() {
-                                      selectedFilter = value!;
-                                      _fetchFilteredData();
-                                    }),
+                                items: filterOptions.map((option) {
+                                  return DropdownMenuItem(
+                                    value: option,
+                                    child: Text(option),
+                                  );
+                                }).toList(),
+                                onChanged: (value) => setState(() {
+                                  selectedFilter = value!;
+                                  _fetchFilteredData();
+                                }),
                               ),
                             ],
                           ),
@@ -1406,10 +1236,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                             children: [
                               const Text(
                                 'Kho chi nhánh',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.black54,
-                                ),
+                                style: TextStyle(fontSize: 12, color: Colors.black54),
                               ),
                               const SizedBox(height: 4),
                               DropdownButton<String>(
@@ -1417,18 +1244,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                 borderRadius: BorderRadius.circular(12),
                                 dropdownColor: Colors.white,
                                 isExpanded: true,
-                                items:
-                                    warehouseOptions.map((option) {
-                                      return DropdownMenuItem(
-                                        value: option,
-                                        child: Text(option),
-                                      );
-                                    }).toList(),
-                                onChanged:
-                                    (value) => setState(() {
-                                      selectedWarehouse = value!;
-                                      _fetchFilteredData();
-                                    }),
+                                items: warehouseOptions.map((option) {
+                                  return DropdownMenuItem(
+                                    value: option,
+                                    child: Text(option),
+                                  );
+                                }).toList(),
+                                onChanged: (value) => setState(() {
+                                  selectedWarehouse = value!;
+                                  _fetchFilteredData();
+                                }),
                               ),
                             ],
                           ),
@@ -1444,9 +1269,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           decoration: InputDecoration(
                             hintText: 'Tìm theo tên, IMEI hoặc ghi chú',
                             prefixIcon: const Icon(Icons.search),
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                            ),
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 16),
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(12),
                             ),
@@ -1477,33 +1300,19 @@ class _InventoryScreenState extends State<InventoryScreen> {
                     }
 
                     final item = filteredInventory[index];
-                    final daysInInventory = _calculateDaysInInventory(
-                      item['import_date'],
-                    );
-                    final isSold =
-                        item['status']?.toString().toLowerCase() == 'đã bán';
-                    final showDaysInInventory =
-                        item['import_date'] != null && !isSold;
+                    final daysInInventory = _calculateDaysInInventory(item['import_date']);
+                    final isSold = item['status']?.toString().toLowerCase() == 'đã bán';
+                    final showDaysInInventory = item['import_date'] != null && !isSold;
 
                     return Card(
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       elevation: 2,
                       margin: const EdgeInsets.symmetric(vertical: 6),
                       child: ListTile(
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 8,
-                        ),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                         title: Text(
-                          CacheUtil.getProductName(
-                            item['product_id']?.toString(),
-                          ),
-                          style: const TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                          ),
+                          CacheUtil.getProductName(item['product_id']?.toString()),
+                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                           overflow: TextOverflow.ellipsis,
                         ),
                         subtitle: Column(
@@ -1520,10 +1329,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                                 'Tồn kho $daysInInventory ngày',
                                 style: TextStyle(
                                   fontSize: 12,
-                                  color:
-                                      daysInInventory <= 7
-                                          ? Colors.green
-                                          : Colors.red,
+                                  color: daysInInventory <= 7 ? Colors.green : Colors.red,
                                 ),
                               ),
                             ],
@@ -1534,10 +1340,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                           children: [
                             Text(
                               item['status']?.toString() ?? '',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 14,
-                              ),
+                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
                             ),
                             const SizedBox(width: 8),
                             IconButton(
@@ -1632,10 +1435,7 @@ class _PrintSettingsDialogState extends State<_PrintSettingsDialog> {
           dense: true,
           contentPadding: EdgeInsets.zero,
           title: const Text('Máy in thông thường (A4)'),
-          subtitle: const Text(
-            'In 4 tem trên 1 tờ giấy A4',
-            style: TextStyle(fontSize: 12),
-          ),
+          subtitle: const Text('In 4 tem trên 1 tờ giấy A4', style: TextStyle(fontSize: 12)),
           value: 'a4',
           groupValue: _selectedPrintType,
           onChanged: (value) {
@@ -1648,10 +1448,7 @@ class _PrintSettingsDialogState extends State<_PrintSettingsDialog> {
           dense: true,
           contentPadding: EdgeInsets.zero,
           title: const Text('Máy in tem nhiệt'),
-          subtitle: const Text(
-            'Cuộn tem nhãn (mọi loại máy)',
-            style: TextStyle(fontSize: 12),
-          ),
+          subtitle: const Text('Cuộn tem nhãn (mọi loại máy)', style: TextStyle(fontSize: 12)),
           value: 'thermal',
           groupValue: _selectedPrintType,
           onChanged: (value) {
@@ -1660,7 +1457,7 @@ class _PrintSettingsDialogState extends State<_PrintSettingsDialog> {
             });
           },
         ),
-
+        
         // Layout (chỉ hiện khi chọn tem nhiệt)
         if (_selectedPrintType == 'thermal') ...[
           const Divider(),
@@ -1674,10 +1471,7 @@ class _PrintSettingsDialogState extends State<_PrintSettingsDialog> {
             dense: true,
             contentPadding: EdgeInsets.zero,
             title: const Text('20mm'),
-            subtitle: const Text(
-              'Tem nhỏ, chỉ hiển thị tối thiểu',
-              style: TextStyle(fontSize: 12),
-            ),
+            subtitle: const Text('Tem nhỏ, chỉ hiển thị tối thiểu', style: TextStyle(fontSize: 12)),
             value: 20,
             groupValue: _selectedLabelHeight,
             onChanged: (value) {
@@ -1690,10 +1484,7 @@ class _PrintSettingsDialogState extends State<_PrintSettingsDialog> {
             dense: true,
             contentPadding: EdgeInsets.zero,
             title: const Text('25mm'),
-            subtitle: const Text(
-              'Tem vừa, hiển thị gọn',
-              style: TextStyle(fontSize: 12),
-            ),
+            subtitle: const Text('Tem vừa, hiển thị gọn', style: TextStyle(fontSize: 12)),
             value: 25,
             groupValue: _selectedLabelHeight,
             onChanged: (value) {
@@ -1706,10 +1497,7 @@ class _PrintSettingsDialogState extends State<_PrintSettingsDialog> {
             dense: true,
             contentPadding: EdgeInsets.zero,
             title: const Text('30mm'),
-            subtitle: const Text(
-              'Tem tiêu chuẩn (phổ biến)',
-              style: TextStyle(fontSize: 12),
-            ),
+            subtitle: const Text('Tem tiêu chuẩn (phổ biến)', style: TextStyle(fontSize: 12)),
             value: 30,
             groupValue: _selectedLabelHeight,
             onChanged: (value) {
@@ -1722,10 +1510,7 @@ class _PrintSettingsDialogState extends State<_PrintSettingsDialog> {
             dense: true,
             contentPadding: EdgeInsets.zero,
             title: const Text('40mm'),
-            subtitle: const Text(
-              'Tem lớn, nhiều không gian',
-              style: TextStyle(fontSize: 12),
-            ),
+            subtitle: const Text('Tem lớn, nhiều không gian', style: TextStyle(fontSize: 12)),
             value: 40,
             groupValue: _selectedLabelHeight,
             onChanged: (value) {
@@ -1750,10 +1535,7 @@ class _PrintSettingsDialogState extends State<_PrintSettingsDialog> {
             dense: true,
             contentPadding: EdgeInsets.zero,
             title: const Text('1 tem/hàng'),
-            subtitle: const Text(
-              'Cuộn 40mm (phổ biến nhất)',
-              style: TextStyle(fontSize: 12),
-            ),
+            subtitle: const Text('Cuộn 40mm (phổ biến nhất)', style: TextStyle(fontSize: 12)),
             value: 1,
             groupValue: _selectedLabelsPerRow,
             onChanged: (value) {
@@ -1766,10 +1548,7 @@ class _PrintSettingsDialogState extends State<_PrintSettingsDialog> {
             dense: true,
             contentPadding: EdgeInsets.zero,
             title: const Text('2 tem/hàng'),
-            subtitle: const Text(
-              'Cuộn 80-90mm',
-              style: TextStyle(fontSize: 12),
-            ),
+            subtitle: const Text('Cuộn 80-90mm', style: TextStyle(fontSize: 12)),
             value: 2,
             groupValue: _selectedLabelsPerRow,
             onChanged: (value) {
@@ -1782,10 +1561,7 @@ class _PrintSettingsDialogState extends State<_PrintSettingsDialog> {
             dense: true,
             contentPadding: EdgeInsets.zero,
             title: const Text('3 tem/hàng'),
-            subtitle: const Text(
-              'Cuộn 120-130mm',
-              style: TextStyle(fontSize: 12),
-            ),
+            subtitle: const Text('Cuộn 120-130mm', style: TextStyle(fontSize: 12)),
             value: 3,
             groupValue: _selectedLabelsPerRow,
             onChanged: (value) {
@@ -1795,10 +1571,10 @@ class _PrintSettingsDialogState extends State<_PrintSettingsDialog> {
             },
           ),
         ],
-
+        
         const Divider(),
         const SizedBox(height: 8),
-
+        
         // Checkbox ghi nhớ
         CheckboxListTile(
           dense: true,
@@ -1815,9 +1591,9 @@ class _PrintSettingsDialogState extends State<_PrintSettingsDialog> {
             });
           },
         ),
-
+        
         const SizedBox(height: 16),
-
+        
         // Buttons
         Row(
           mainAxisAlignment: MainAxisAlignment.end,
