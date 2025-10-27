@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import 'fix_receive_summary.dart';
 import 'dart:math' as math;
 import '../../text_scanner_screen.dart';
+import '../../../helpers/error_handler.dart';
 
 // Cache utility class
 class CacheUtil {
@@ -98,6 +99,7 @@ class _FixReceiveFormState extends State<FixReceiveForm> {
   Map<String, String> productMap = {};
   List<String> currencies = [];
   List<Map<String, dynamic>> warehouses = [];
+  List<Map<String, dynamic>> fixers = [];
   List<String> imeiSuggestions = [];
   bool isLoading = true;
   String? errorMessage;
@@ -200,10 +202,28 @@ class _FixReceiveFormState extends State<FixReceiveForm> {
           .toList()
         ..sort();
 
+      final fixerResponse = await retry(
+        () => supabase.from('fix_units').select('id, name'),
+        operation: 'Fetch fixers',
+      );
+      final fixerList = fixerResponse
+          .map((e) {
+            final id = e['id']?.toString();
+            final name = e['name'] as String?;
+            if (id != null && name != null) {
+              return {'id': id, 'name': name};
+            }
+            return null;
+          })
+          .whereType<Map<String, dynamic>>()
+          .toList()
+        ..sort((a, b) => (a['name'] as String).toLowerCase().compareTo((b['name'] as String).toLowerCase()));
+
       if (mounted) {
         setState(() {
           warehouses = warehouseList;
           currencies = uniqueCurrencies;
+          fixers = fixerList;
           currency = currency ?? (uniqueCurrencies.length == 1 ? uniqueCurrencies.first : null); // Chỉ gán currency nếu có đúng 1 loại tiền tệ
           isLoading = false;
         });
@@ -444,69 +464,79 @@ class _FixReceiveFormState extends State<FixReceiveForm> {
     }
 
     int quantity = 0;
+    String? selectedFixerId;
 
     await showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Tự động lấy IMEI'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'Số lượng máy nhận về'),
-              onChanged: (val) => quantity = int.tryParse(val) ?? 0,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Tự động lấy IMEI'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'Số lượng máy nhận về'),
+                onChanged: (val) => quantity = int.tryParse(val) ?? 0,
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                value: selectedFixerId,
+                items: fixers.map((f) => DropdownMenuItem(
+                  value: f['id'] as String,
+                  child: Text(f['name'] as String),
+                )).toList(),
+                decoration: const InputDecoration(
+                  labelText: 'Đơn vị fix lỗi',
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (val) => setDialogState(() => selectedFixerId = val),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Hủy'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                Navigator.pop(context);
+                if (quantity > 0 && selectedFixerId != null) {
+                  await _fetchImeisForQuantity(quantity, selectedFixerId!);
+                }
+              },
+              child: const Text('Xác nhận'),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Hủy'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              Navigator.pop(context);
-              if (quantity > 0) {
-                await _fetchImeisForQuantity(quantity);
-              }
-            },
-            child: const Text('Xác nhận'),
-          ),
-        ],
       ),
     );
   }
 
-  Future<void> _fetchImeisForQuantity(int quantity) async {
+  Future<void> _fetchImeisForQuantity(int quantity, String fixerId) async {
     if (productId == null || quantity <= 0) return;
 
     try {
       final supabase = widget.tenantClient;
-      final response = await retry(
+      
+      // Fetch fixer name from fixerId
+      final fixerData = await retry(
         () => supabase
-            .from('products')
-            .select('imei')
-            .eq('product_id', productId!)
-            .eq('status', 'Đang sửa')
-            .limit(quantity),
-        operation: 'Fetch IMEIs for auto',
+            .from('fix_units')
+            .select('name')
+            .eq('id', fixerId)
+            .maybeSingle(),
+        operation: 'Fetch fixer name',
       );
-
-      final imeiListFromDb = response
-          .map((e) => e['imei'] as String?)
-          .whereType<String>()
-          .where((imei) => !imeiList.contains(imei))
-          .toList()
-        ..sort();
-
-      if (imeiListFromDb.length < quantity) {
+      
+      if (fixerData == null) {
         if (mounted) {
           await showDialog(
             context: context,
             builder: (context) => AlertDialog(
               title: const Text('Thông báo'),
-              content: Text('Số lượng sản phẩm không đủ! Chỉ có ${imeiListFromDb.length} sản phẩm "${CacheUtil.getProductName(productId)}" đang sửa.'),
+              content: const Text('Không tìm thấy đơn vị fix lỗi!'),
               actions: [
                 TextButton(
                   onPressed: () => Navigator.pop(context),
@@ -516,15 +546,103 @@ class _FixReceiveFormState extends State<FixReceiveForm> {
             ),
           );
         }
+        return;
       }
+      
+      final fixerName = fixerData['name'] as String;
+      
+      // ✅ FIX: Lấy gấp đôi để đảm bảo đủ sau khi lọc duplicate
+      final fetchQuantity = quantity * 2;
+      
+      final response = await retry(
+        () => supabase
+            .from('products')
+            .select('imei, import_date')
+            .eq('product_id', productId!)
+            .eq('status', 'Đang sửa')
+            .eq('fix_unit', fixerName)
+            .order('import_date', ascending: true)  // ✅ FIX: FIFO - Lấy hàng cũ nhất trước
+            .limit(fetchQuantity),
+        operation: 'Fetch IMEIs for auto',
+      );
 
-      if (mounted && imeiListFromDb.isNotEmpty) {
-        setState(() {
-          imeiList.addAll(imeiListFromDb);
-        });
+      final imeiListFromDb = response
+          .map((e) => e['imei'] as String?)
+          .whereType<String>()
+          .where((imei) => imei != null && imei.trim().isNotEmpty && !imeiList.contains(imei))
+          .cast<String>()
+          .take(quantity)  // ✅ FIX: Chỉ lấy đúng số lượng sau khi lọc
+          .toList();
+
+      if (imeiListFromDb.length < quantity) {
+        // Check tổng số lượng có đang sửa
+        final totalCountResponse = await supabase
+            .from('products')
+            .select('imei')
+            .eq('product_id', productId!)
+            .eq('status', 'Đang sửa')
+            .eq('fix_unit', fixerName)
+            .count(CountOption.exact);
+        
+        final totalCount = totalCountResponse.count;
+        
+        if (mounted) {
+          await showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Thông báo'),
+              content: Text(
+                'Số lượng sản phẩm không đủ!\n\n'
+                'Cần: $quantity sản phẩm\n'
+                'Đang sửa tại "$fixerName": $totalCount sản phẩm\n'
+                'Đã nhập: ${imeiList.length} sản phẩm\n'
+                'Có thể lấy thêm: ${imeiListFromDb.length} sản phẩm\n\n'
+                'Sản phẩm: "${CacheUtil.getProductName(productId)}"'
+              ),
+              actions: [
+                if (imeiListFromDb.isNotEmpty)
+                  TextButton(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      setState(() {
+                        imeiList.addAll(imeiListFromDb);
+                      });
+                    },
+                    child: Text('Lấy ${imeiListFromDb.length} sản phẩm'),
+                  ),
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Đóng'),
+                ),
+              ],
+            ),
+          );
+        }
+      } else {
+        // Đủ số lượng, thêm vào list
+        if (mounted) {
+          setState(() {
+            imeiList.addAll(imeiListFromDb);
+          });
+        }
       }
     } catch (e) {
       debugPrint('Error fetching IMEIs: $e');
+      if (mounted) {
+        await showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Lỗi'),
+            content: Text('Không thể tải IMEI: $e'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Đóng'),
+              ),
+            ],
+          ),
+        );
+      }
     }
   }
 

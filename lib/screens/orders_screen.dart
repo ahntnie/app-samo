@@ -5,6 +5,8 @@ import 'package:collection/collection.dart';
 import 'package:intl/intl.dart';
 import 'transactions/forms/sale_form.dart' show CacheUtil, SaleForm;
 import './notification_service.dart';
+import '../helpers/error_handler.dart';
+import '../helpers/cache_helper.dart';
 
 class Order {
   final int id;
@@ -72,7 +74,7 @@ class _OrdersScreenState extends State<OrdersScreen> with SingleTickerProviderSt
   int? categoryId;
   String? productId;
   String? productName;
-  int quantity = 1;
+  int quantity = 0;
   double price = 0.0;
   double customerPrice = 0.0;
   double transporterPrice = 0.0;
@@ -94,7 +96,14 @@ class _OrdersScreenState extends State<OrdersScreen> with SingleTickerProviderSt
   
   final TextEditingController priceController = TextEditingController();
   final TextEditingController customerPriceController = TextEditingController();
+  final TextEditingController quantityController = TextEditingController();
+  final TextEditingController customerController = TextEditingController();
+  final TextEditingController productController = TextEditingController();
   final NumberFormat numberFormat = NumberFormat('#,###', 'vi_VN');
+  
+  // Key để force rebuild Autocomplete
+  Key customerAutocompleteKey = UniqueKey();
+  Key productAutocompleteKey = UniqueKey();
 
   @override
   void initState() {
@@ -108,6 +117,9 @@ class _OrdersScreenState extends State<OrdersScreen> with SingleTickerProviderSt
     _tabController.dispose();
     priceController.dispose();
     customerPriceController.dispose();
+    quantityController.dispose();
+    customerController.dispose();
+    productController.dispose();
     super.dispose();
   }
 
@@ -370,6 +382,12 @@ class _OrdersScreenState extends State<OrdersScreen> with SingleTickerProviderSt
                         .eq('name', name)
                         .single();
                     final newCustomerId = newCustomerResponse['id']?.toString();
+                    
+                    // ✅ Cache customer ngay sau khi tạo
+                    if (newCustomerId != null) {
+                      CacheHelper.cacheCustomer(newCustomerId, name);
+                    }
+                    
                     setState(() {
                       customers.add({
                         'id': newCustomerId,
@@ -473,18 +491,19 @@ class _OrdersScreenState extends State<OrdersScreen> with SingleTickerProviderSt
                         'phone': phone,
                         'address': address,
                       })
-                      .eq('name', customerData['name']);
+                      .eq('id', customerData['id']);
 
                   setState(() {
-                    final customerIndex = customers.indexWhere((c) => c['name'] == customerData['name']);
+                    final customerIndex = customers.indexWhere((c) => c['id'] == customerData['id']);
                     if (customerIndex != -1) {
                       customers[customerIndex] = {
+                        'id': customerData['id'],
                         'name': name,
                         'phone': phone,
                         'address': address,
                       };
                     }
-                    if (customer == customerData['name']) {
+                    if (customerId == customerData['id']) {
                       customer = name;
                       selectedCustomerData = {
                         'id': customerData['id'],
@@ -709,7 +728,7 @@ class _OrdersScreenState extends State<OrdersScreen> with SingleTickerProviderSt
   }
 
   Future<void> showConfirmDialog(BuildContext scaffoldContext) async {
-    if (customer == null || categoryId == null || productId == null || quantity <= 0 || price <= 0) {
+    if (customer == null || categoryId == null || productId == null || quantity == 0 || price <= 0) {
       showDialog(
         context: scaffoldContext,
         builder: (context) => AlertDialog(
@@ -794,36 +813,47 @@ class _OrdersScreenState extends State<OrdersScreen> with SingleTickerProviderSt
                   'order_created',
                 );
 
-                ScaffoldMessenger.of(scaffoldContext).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      'Có đơn order mới cho sản phẩm "$productName" số lượng $quantity',
-                      style: const TextStyle(color: Colors.white),
-                    ),
-                    backgroundColor: Colors.black,
-                    behavior: SnackBarBehavior.floating,
-                    margin: const EdgeInsets.all(8),
-                    duration: const Duration(seconds: 3),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  ),
-                );
-
+                Navigator.pop(dialogContext);
+                
+                // Reset all fields after closing dialog
                 setState(() {
                   customer = null;
+                  customerId = null;
                   categoryId = null;
                   categoryName = null;
                   productId = null;
                   productName = null;
-                  quantity = 1;
+                  quantity = 0;
                   price = 0.0;
                   customerPrice = 0.0;
                   transporterPrice = 0.0;
                   selectedCustomerData = null;
+                  
+                  // Clear all controllers
                   priceController.clear();
                   customerPriceController.clear();
+                  quantityController.clear();
+                  customerController.clear();
+                  productController.clear();
+                  
+                  // Force rebuild Autocomplete widgets
+                  customerAutocompleteKey = UniqueKey();
+                  productAutocompleteKey = UniqueKey();
                 });
 
-                Navigator.pop(dialogContext);
+                ScaffoldMessenger.of(scaffoldContext).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      'Đã tạo đơn order cho sản phẩm "$productName" số lượng $quantity',
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                    backgroundColor: Colors.green,
+                    behavior: SnackBarBehavior.floating,
+                    margin: const EdgeInsets.all(8),
+                    duration: const Duration(seconds: 2),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                );
               } catch (e) {
                 Navigator.pop(dialogContext);
                 await showDialog(
@@ -998,8 +1028,11 @@ class _OrdersScreenState extends State<OrdersScreen> with SingleTickerProviderSt
                       }
                     } catch (e) {
                       Navigator.pop(context);
-                      ScaffoldMessenger.of(scaffoldContext).showSnackBar(
-                        SnackBar(content: Text('Lỗi khi cập nhật trạng thái: $e')),
+                      await ErrorHandler.showErrorDialog(
+                        context: scaffoldContext,
+                        title: 'Lỗi cập nhật trạng thái',
+                        error: e,
+                        showRetry: false,
                       );
                     }
                   }
@@ -1180,6 +1213,7 @@ class _OrdersScreenState extends State<OrdersScreen> with SingleTickerProviderSt
                     Expanded(
                       child: wrapField(
                         Autocomplete<String>(
+                          key: customerAutocompleteKey,
                           optionsBuilder: (textEditingValue) {
                             final query = textEditingValue.text.toLowerCase();
                             return customers
@@ -1198,9 +1232,20 @@ class _OrdersScreenState extends State<OrdersScreen> with SingleTickerProviderSt
                           });
                           },
                           fieldViewBuilder: (context, controller, focusNode, onSubmit) {
+                            customerController.text = controller.text;
                             return TextField(
-                              controller: controller,
+                              controller: customerController,
                               focusNode: focusNode,
+                              onChanged: (val) {
+                                controller.text = val;
+                                if (val.isEmpty) {
+                                  setState(() {
+                                    customer = null;
+                                    customerId = null;
+                                    selectedCustomerData = null;
+                                  });
+                                }
+                              },
                               decoration: const InputDecoration(
                                 labelText: 'Khách hàng',
                                 border: InputBorder.none,
@@ -1281,6 +1326,7 @@ class _OrdersScreenState extends State<OrdersScreen> with SingleTickerProviderSt
                     Expanded(
                       child: wrapField(
                         Autocomplete<Map<String, dynamic>>(
+                          key: productAutocompleteKey,
                           optionsBuilder: (textEditingValue) {
                             final query = textEditingValue.text.toLowerCase();
                             final filtered = products
@@ -1297,9 +1343,19 @@ class _OrdersScreenState extends State<OrdersScreen> with SingleTickerProviderSt
                             });
                           },
                           fieldViewBuilder: (context, controller, focusNode, onSubmit) {
+                            productController.text = controller.text;
                             return TextField(
-                              controller: controller,
+                              controller: productController,
                               focusNode: focusNode,
+                              onChanged: (val) {
+                                controller.text = val;
+                                if (val.isEmpty) {
+                                  setState(() {
+                                    productId = null;
+                                    productName = null;
+                                  });
+                                }
+                              },
                               decoration: const InputDecoration(
                                 labelText: 'Sản phẩm',
                                 border: InputBorder.none,
@@ -1318,10 +1374,11 @@ class _OrdersScreenState extends State<OrdersScreen> with SingleTickerProviderSt
                 ),
                 wrapField(
                   TextFormField(
+                    controller: quantityController,
                     keyboardType: TextInputType.number,
                     onChanged: (val) {
                       setState(() {
-                        quantity = int.tryParse(val) ?? 1;
+                        quantity = int.tryParse(val) ?? 0;
                       });
                     },
                     decoration: const InputDecoration(

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../helpers/cache_helper.dart';
 
 class CategoriesScreen extends StatefulWidget {
   final List<String> permissions;
@@ -132,8 +133,15 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
             'products': name,
             'category_id': selectedCategoryId,
           }).select('id, products').single();
-          productNameCache[response['id'].toString()] = name;
-          print('Added product: $name, id: ${response['id']}, category_id: $selectedCategoryId');
+          
+          final newProductId = response['id'].toString();
+          final newProductName = response['products'] as String;
+          productNameCache[newProductId] = newProductName;
+          
+          // ✅ Cache product ngay sau khi tạo
+          CacheHelper.cacheProduct(newProductId, newProductName);
+          
+          print('Added product: $newProductName, id: $newProductId, category_id: $selectedCategoryId');
           break;
         case 'Tài khoản thanh toán':
           await supabase.from('financial_accounts').insert({

@@ -7,6 +7,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:share_plus/share_plus.dart';
 import 'dart:io';
 import 'package:device_info_plus/device_info_plus.dart';
+import '../helpers/error_handler.dart';
 
 class ExcelReportScreen extends StatefulWidget {
   final List<String> permissions;

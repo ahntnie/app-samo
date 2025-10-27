@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'home_screen.dart';
-import 'signup_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -33,44 +32,28 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       final prefs = await SharedPreferences.getInstance();
-      final savedEmail = prefs.getString('login_email');
-      final savedPassword = prefs.getString('login_password');
-      final savedRememberPassword = prefs.getBool('login_rememberPassword') ?? false;
-
-      if (savedEmail != null && savedPassword != null && savedRememberPassword) {
-        // Thử đăng nhập với thông tin đã lưu
-        final response = await Supabase.instance.client.auth.signInWithPassword(
-          email: savedEmail,
-          password: savedPassword,
-        );
-
-        if (response.user != null) {
-          // Lấy thông tin tenant từ dự án chính
-          final tenantData = await Supabase.instance.client
-              .from('tenants')
-              .select('supabase_url, supabase_anon_key')
-              .eq('user_id', response.user!.id)
-              .maybeSingle();
-
-          if (tenantData != null) {
-            final url = tenantData['supabase_url'];
-            final anonKey = tenantData['supabase_anon_key'];
-
-            // Tạo Supabase client cho dự án phụ
-            final tenantClient = SupabaseClient(url, anonKey);
-
-            // Lưu thông tin tenant
-            await _saveTenantData(url, anonKey);
-            
-            if (mounted) {
-              goToHome(tenantClient, url, anonKey);
-              return;
-            }
-          }
+      
+      // ✅ Kiểm tra nếu đã đăng nhập thành công trước đó
+      final hasLoggedIn = prefs.getBool('has_logged_in') ?? false;
+      final savedTenantUrl = prefs.getString('tenant_url');
+      final savedTenantAnonKey = prefs.getString('tenant_anon_key');
+      
+      if (hasLoggedIn && savedTenantUrl != null && savedTenantAnonKey != null) {
+        // ✅ Tự động vào Home mà không cần đăng nhập lại
+        print('✅ Auto-login: User has logged in before, going to Home...');
+        final tenantClient = SupabaseClient(savedTenantUrl, savedTenantAnonKey);
+        
+        if (mounted) {
+          goToHome(tenantClient, savedTenantUrl, savedTenantAnonKey);
+          return;
         }
       }
 
-      // Load saved credentials for manual login if auto-login fails
+      // Nếu chưa từng đăng nhập, load saved credentials để hiển thị
+      final savedEmail = prefs.getString('login_email');
+      final savedPassword = prefs.getString('login_password');
+      final savedRememberPassword = prefs.getBool('login_rememberPassword') ?? false;
+      
       if (savedEmail != null && savedPassword != null && savedRememberPassword) {
         setState(() {
           emailController.text = savedEmail;
@@ -86,19 +69,6 @@ class _LoginScreenState extends State<LoginScreen> {
           isLoading = false;
         });
       }
-    }
-  }
-
-  // Đăng xuất phiên hiện tại và xóa thông tin tenant
-  Future<void> _clearSessionAndCredentials() async {
-    await Supabase.instance.client.auth.signOut();
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('tenant_url');
-    await prefs.remove('tenant_anon_key');
-    if (!rememberPassword) {
-      await prefs.remove('login_email');
-      await prefs.remove('login_password');
-      await prefs.setBool('login_rememberPassword', false);
     }
   }
 
@@ -121,6 +91,7 @@ class _LoginScreenState extends State<LoginScreen> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('tenant_url', url);
     await prefs.setString('tenant_anon_key', anonKey);
+    await prefs.setBool('has_logged_in', true); // ✅ Đánh dấu đã đăng nhập thành công
   }
 
   // Đăng nhập
@@ -159,7 +130,7 @@ class _LoginScreenState extends State<LoginScreen> {
           await _saveCredentials();
           
           if (mounted) {
-            goToHome(tenantClient, url, anonKey);
+            goToHome(tenantClient, url, anonKey, isFirstLogin: true); // ✅ Đánh dấu đăng nhập lần đầu
           }
         } else {
           setState(() {
@@ -221,7 +192,7 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   // Chuyển đến màn hình Home, truyền SupabaseClient của dự án phụ
-  void goToHome(SupabaseClient tenantClient, String url, String anonKey) {
+  void goToHome(SupabaseClient tenantClient, String url, String anonKey, {bool isFirstLogin = false}) {
     if (!mounted) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -232,6 +203,7 @@ class _LoginScreenState extends State<LoginScreen> {
             tenantClient: tenantClient,
             tenantUrl: url,
             tenantAnonKey: anonKey,
+            isFirstLogin: isFirstLogin, // ✅ Truyền flag đăng nhập lần đầu
           ),
         ),
       );

@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import '../../notification_service.dart';
+import '../../../helpers/error_handler.dart';
 
 class ThousandsFormatterLocal extends TextInputFormatter {
   @override
@@ -303,7 +304,16 @@ class _ExchangeFormState extends State<ExchangeForm> {
     }
   }
 
-  void _showErrorDialog(String message) {
+  Future<void> _showErrorDialog(String message) async {
+    await ErrorHandler.showErrorDialog(
+      context: context,
+      title: 'Lỗi',
+      error: message,
+      showRetry: false,
+    );
+  }
+
+  void _showErrorDialogOld(String message) {
     showDialog(
       context: context,
       builder:

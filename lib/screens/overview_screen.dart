@@ -3,16 +3,16 @@ import 'package:intl/intl.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'dart:math';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../helpers/global_cache_manager.dart';
 
-// Cache utility class
+// Backward compatibility alias
 class CacheUtil {
-  static final Map<String, String> productNameCache = {};
-  static final Map<String, String> warehouseNameCache = {};
-
-  static void cacheProductName(String id, String name) => productNameCache[id] = name;
-  static void cacheWarehouseName(String id, String name) => warehouseNameCache[id] = name;
-  static String getProductName(String? id) => id != null ? productNameCache[id] ?? 'Không xác định' : 'Không xác định';
-  static String getWarehouseName(String? id) => id != null ? warehouseNameCache[id] ?? 'Không xác định' : 'Không xác định';
+  static Map<String, String> get productNameCache => GlobalCacheManager().productNameCache;
+  static Map<String, String> get warehouseNameCache => GlobalCacheManager().warehouseNameCache;
+  static void cacheProductName(String id, String name) => GlobalCacheManager().cacheProductName(id, name);
+  static void cacheWarehouseName(String id, String name) => GlobalCacheManager().cacheWarehouseName(id, name);
+  static String getProductName(String? id) => GlobalCacheManager().getProductName(id);
+  static String getWarehouseName(String? id) => GlobalCacheManager().getWarehouseName(id);
 }
 
 class OverviewScreen extends StatefulWidget {
@@ -85,19 +85,15 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
 
   Future<void> _initCaches() async {
     try {
-      final productResponse = await widget.tenantClient.from('products_name').select('id, products');
-      for (var product in productResponse) {
-        CacheUtil.cacheProductName(product['id'].toString(), product['products'] as String);
-      }
+      // Sử dụng GlobalCacheManager - tự động skip nếu đã có cache
+      final cacheManager = GlobalCacheManager();
+      await cacheManager.fetchAndCacheProducts(widget.tenantClient);
+      await cacheManager.fetchAndCacheWarehouses(widget.tenantClient);
 
-      final warehouseResponse = await widget.tenantClient.from('warehouses').select('id, name');
+      // Build warehouse options từ cache
       List<String> warehouseNames = ['Tất cả chi nhánh'];
-      for (var warehouse in warehouseResponse) {
-        final id = warehouse['id'].toString();
-        final name = warehouse['name'] as String;
-        CacheUtil.cacheWarehouseName(id, name);
-        warehouseNames.add(name);
-      }
+      warehouseNames.addAll(cacheManager.warehouseNameCache.values);
+      
       setState(() {
         _warehouseOptions = warehouseNames;
       });
@@ -292,26 +288,36 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
         _categories = List<Map<String, dynamic>>.from(categoriesResponse);
       });
 
-      var productsQuery = widget.tenantClient
-          .from('products')
-          .select('sale_price, profit, sale_date, status, category_id, cost_price, product_id, warehouse_id')
-          .not('sale_date', 'is', null)
-          .gte('sale_date', startDate.toIso8601String())
-          .lte('sale_date', endDate.toIso8601String());
-
-      if (_selectedCategoryId != null) {
-        productsQuery = productsQuery.eq('category_id', _selectedCategoryId!);
-      }
+      // Lấy warehouse_id nếu có filter
+      String? warehouseIdFilter;
       if (_selectedWarehouse != 'Tất cả chi nhánh') {
-        final warehouseId = CacheUtil.warehouseNameCache.entries
+        warehouseIdFilter = CacheUtil.warehouseNameCache.entries
             .firstWhere((entry) => entry.value == _selectedWarehouse, orElse: () => MapEntry('', ''))
             .key;
-        if (warehouseId.isNotEmpty) {
-          productsQuery = productsQuery.eq('warehouse_id', warehouseId);
-        }
+        if (warehouseIdFilter.isEmpty) warehouseIdFilter = null;
       }
 
-      final products = await productsQuery;
+      // GỌI DATABASE FUNCTION thay vì query toàn bộ products
+      final salesSummaryResponse = await widget.tenantClient.rpc(
+        'get_sales_summary',
+        params: {
+          'p_start_date': startDate.toIso8601String(),
+          'p_end_date': endDate.toIso8601String(),
+          'p_category_id': _selectedCategoryId,
+          'p_warehouse_id': warehouseIdFilter,
+        },
+      );
+
+      double totalRev = 0;
+      double totalProfit = 0;
+      int soldCount = 0;
+      
+      if (salesSummaryResponse != null && salesSummaryResponse is List && salesSummaryResponse.isNotEmpty) {
+        final summary = salesSummaryResponse[0];
+        totalRev = (summary['total_revenue'] as num?)?.toDouble() ?? 0.0;
+        totalProfit = (summary['total_profit'] as num?)?.toDouble() ?? 0.0;
+        soldCount = (summary['sold_count'] as num?)?.toInt() ?? 0;
+      }
 
       final categories = Map.fromEntries(
         (categoriesResponse as List<dynamic>)
@@ -359,26 +365,19 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
         }
       }
 
+      // GỌI DATABASE FUNCTION để tính inventory cost
+      final inventoryCostResponse = await widget.tenantClient.rpc(
+        'get_inventory_cost_summary',
+        params: {
+          'p_category_id': _selectedCategoryId,
+          'p_warehouse_id': warehouseIdFilter,
+        },
+      );
+
       double totalInventoryCostValue = 0;
-      var allProductsQuery = widget.tenantClient.from('products').select('status, cost_price, product_id, category_id, warehouse_id');
-      if (_selectedCategoryId != null) {
-        allProductsQuery = allProductsQuery.eq('category_id', _selectedCategoryId!);
-      }
-      if (_selectedWarehouse != 'Tất cả chi nhánh') {
-        final warehouseId = CacheUtil.warehouseNameCache.entries
-            .firstWhere((entry) => entry.value == _selectedWarehouse, orElse: () => MapEntry('', ''))
-            .key;
-        if (warehouseId.isNotEmpty) {
-          allProductsQuery = allProductsQuery.eq('warehouse_id', warehouseId);
-        }
-      }
-      final allProducts = await allProductsQuery;
-      for (final product in allProducts) {
-        final status = product['status']?.toString() ?? '';
-        if (status == 'Đã bán' || status == 'Đã trả ncc') continue;
-        final costPriceRaw = product['cost_price'];
-        final costPrice = costPriceRaw is String ? num.tryParse(costPriceRaw)?.toDouble() ?? 0.0 : (costPriceRaw as num?)?.toDouble() ?? 0.0;
-        totalInventoryCostValue += costPrice;
+      if (inventoryCostResponse != null && inventoryCostResponse is List && inventoryCostResponse.isNotEmpty) {
+        final summary = inventoryCostResponse[0];
+        totalInventoryCostValue = (summary['total_inventory_cost'] as num?)?.toDouble() ?? 0.0;
       }
 
       double totalCustomerDebtValue = 0;
@@ -424,63 +423,33 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
         }
       }).toList();
 
+      // GỌI DATABASE FUNCTION để lấy time series data cho biểu đồ
+      final timeSeriesResponse = await widget.tenantClient.rpc(
+        'get_time_series_data',
+        params: {
+          'p_time_points': timePoints.map((t) => t.toIso8601String()).toList(),
+          'p_category_id': _selectedCategoryId,
+          'p_warehouse_id': warehouseIdFilter,
+        },
+      );
+
       Map<int, double> revenueMap = {};
       Map<int, double> profitMap = {};
-      Map<int, double> incomeMap = {};
-      Map<int, double> expenseMap = {};
-      double totalRev = 0;
-      double totalProfit = 0;
-      double totalInc = 0;
-      double totalExp = 0;
-      int soldCount = 0;
-
-      for (final product in products) {
-        final salePrice = (product['sale_price'] as num?)?.toDouble() ?? 0.0;
-        final profitValue = (product['profit'] as num?)?.toDouble() ?? 0.0;
-        final saleDate = DateTime.tryParse(product['sale_date']?.toString() ?? '');
-
-        if (saleDate != null) {
-          int pointIndex = -1;
-          if (_selectedTimeFilter == 'Hôm nay') {
-            for (int i = 0; i < timePoints.length - 1; i++) {
-              if (saleDate.isAfter(timePoints[i]) && (saleDate.isBefore(timePoints[i + 1]) || saleDate.isAtSameMomentAs(timePoints[i + 1]))) {
-                pointIndex = i;
-                break;
-              }
-            }
-            if (pointIndex == -1) {
-              if (saleDate.isBefore(timePoints[0])) {
-                pointIndex = 0;
-              } else if (saleDate.isAfter(timePoints.last) || saleDate.isAtSameMomentAs(timePoints.last)) {
-                pointIndex = timePoints.length - 1;
-              }
-            }
-          } else {
-            for (int i = 0; i < timePoints.length - 1; i++) {
-              final nextPoint = i == timePoints.length - 2 ? endDate : timePoints[i + 1];
-              if (saleDate.isAfter(timePoints[i]) && (saleDate.isBefore(nextPoint) || saleDate.isAtSameMomentAs(nextPoint))) {
-                pointIndex = i;
-                break;
-              }
-            }
-            if (pointIndex == -1) {
-              if (saleDate.isBefore(timePoints[0])) {
-                pointIndex = 0;
-              } else if (saleDate.isAfter(timePoints.last) || saleDate.isAtSameMomentAs(timePoints.last)) {
-                pointIndex = timePoints.length - 1;
-              }
-            }
-          }
-
-          if (pointIndex != -1) {
-            revenueMap[pointIndex] = (revenueMap[pointIndex] ?? 0) + salePrice;
-            profitMap[pointIndex] = (profitMap[pointIndex] ?? 0) + profitValue;
-          }
-          totalRev += salePrice;
-          totalProfit += profitValue;
-          soldCount += 1;
+      
+      if (timeSeriesResponse != null && timeSeriesResponse is List) {
+        for (final point in timeSeriesResponse) {
+          final pointIndex = (point['point_index'] as num?)?.toInt() ?? 0;
+          final revenue = (point['revenue'] as num?)?.toDouble() ?? 0.0;
+          final profit = (point['profit'] as num?)?.toDouble() ?? 0.0;
+          revenueMap[pointIndex] = revenue;
+          profitMap[pointIndex] = profit;
         }
       }
+
+      Map<int, double> incomeMap = {};
+      Map<int, double> expenseMap = {};
+      double totalInc = 0;
+      double totalExp = 0;
 
       double totalCostValue = 0;
       
@@ -545,17 +514,30 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
         }
       }
 
+      // GỌI DATABASE FUNCTION để lấy stock summary
+      final stockSummaryResponse = await widget.tenantClient.rpc(
+        'get_stock_summary',
+        params: {
+          'p_category_id': _selectedCategoryId,
+          'p_warehouse_id': warehouseIdFilter,
+        },
+      );
+
       Map<String, Map<String, int>> stock = {};
-      for (final p in allProducts) {
-        final status = p['status']?.toString() ?? '';
-        final categoryId = p['category_id'] as int?;
-        if (status.isEmpty || categoryId == null || status == 'Đã bán' || status == 'Đã trả ncc') continue;
+      if (stockSummaryResponse != null && stockSummaryResponse is List) {
+        for (final item in stockSummaryResponse) {
+          final status = item['status']?.toString() ?? '';
+          final categoryId = item['category_id'] as int?;
+          final productCount = (item['product_count'] as num?)?.toInt() ?? 0;
+          
+          if (status.isEmpty || categoryId == null) continue;
 
-        final categoryName = categories[categoryId] ?? 'Không xác định';
-        final categoryShort = categoryName == 'điện thoại' ? 'ĐT' : categoryName == 'phụ kiện' ? 'PK' : categoryName;
+          final categoryName = categories[categoryId] ?? 'Không xác định';
+          final categoryShort = categoryName == 'điện thoại' ? 'ĐT' : categoryName == 'phụ kiện' ? 'PK' : categoryName;
 
-        stock[status] ??= {};
-        stock[status]![categoryShort] = (stock[status]![categoryShort] ?? 0) + 1;
+          stock[status] ??= {};
+          stock[status]![categoryShort] = (stock[status]![categoryShort] ?? 0) + productCount;
+        }
       }
 
       setState(() {
@@ -604,32 +586,33 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
 
   Future<void> fetchProductDistribution(String? status) async {
     try {
-      var query = widget.tenantClient
-          .from('products')
-          .select('product_id, status, category_id, warehouse_id')
-          .not('status', 'in', ['Đã bán', 'Đã trả ncc']);
-
-      if (status != null) {
-        query = query.eq('status', status);
-      }
-      if (_selectedCategoryId != null) {
-        query = query.eq('category_id', _selectedCategoryId!);
-      }
+      // Lấy warehouse_id nếu có filter
+      String? warehouseIdFilter;
       if (_selectedWarehouse != 'Tất cả chi nhánh') {
-        final warehouseId = CacheUtil.warehouseNameCache.entries
+        warehouseIdFilter = CacheUtil.warehouseNameCache.entries
             .firstWhere((entry) => entry.value == _selectedWarehouse, orElse: () => MapEntry('', ''))
             .key;
-        if (warehouseId.isNotEmpty) {
-          query = query.eq('warehouse_id', warehouseId);
-        }
+        if (warehouseIdFilter.isEmpty) warehouseIdFilter = null;
       }
 
-      final products = await query;
+      // GỌI DATABASE FUNCTION để lấy product distribution
+      final productDistResponse = await widget.tenantClient.rpc(
+        'get_product_distribution',
+        params: {
+          'p_status': status,
+          'p_category_id': _selectedCategoryId,
+          'p_warehouse_id': warehouseIdFilter,
+        },
+      );
 
       Map<String, int> productCounts = {};
-      for (final product in products) {
-        final productName = CacheUtil.getProductName(product['product_id']?.toString());
-        productCounts[productName] = (productCounts[productName] ?? 0) + 1;
+      if (productDistResponse != null && productDistResponse is List) {
+        for (final product in productDistResponse) {
+          final productId = product['product_id']?.toString();
+          final productCount = (product['product_count'] as num?)?.toInt() ?? 0;
+          final productName = CacheUtil.getProductName(productId);
+          productCounts[productName] = (productCounts[productName] ?? 0) + productCount;
+        }
       }
 
       List<MapEntry<String, int>> sortedProducts = productCounts.entries.toList()

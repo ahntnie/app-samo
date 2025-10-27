@@ -38,9 +38,12 @@ String formatNumberLocal(num value) {
 
 class CacheUtil {
   static final Map<String, String> productNameCache = {};
+  static final Map<String, String> warehouseNameCache = {};
 
   static void cacheProductName(String id, String name) => productNameCache[id] = name;
   static String getProductName(String? id) => id != null ? productNameCache[id] ?? 'Không xác định' : 'Không xác định';
+  static void cacheWarehouseName(String id, String name) => warehouseNameCache[id] = name;
+  static String getWarehouseName(String? id) => id != null ? warehouseNameCache[id] ?? 'Không xác định' : 'Không xác định';
 }
 
 class Debouncer {
@@ -68,6 +71,7 @@ class ReturnForm extends StatefulWidget {
   final String? initialImei;
   final String? initialNote;
   final String? initialCurrency;
+  final String? initialSupplierId;
   final List<Map<String, dynamic>> ticketItems;
   final int? editIndex;
 
@@ -81,6 +85,7 @@ class ReturnForm extends StatefulWidget {
     this.initialImei,
     this.initialNote,
     this.initialCurrency,
+    this.initialSupplierId,
     this.ticketItems = const [],
     this.editIndex,
   });
@@ -106,9 +111,11 @@ class _ReturnFormState extends State<ReturnForm> {
 
   List<String> suppliers = [];
   Map<String, String> supplierIdMap = {}; // Map supplier name to id
+  Map<String, String> supplierNameMap = {}; // Map supplier id to name
   List<String> currencies = [];
   List<String> imeiSuggestions = [];
   Map<String, String> productMap = {};
+  List<Map<String, dynamic>> warehouses = [];
   bool isLoading = true;
   String? errorMessage;
   String? imeiError;
@@ -141,6 +148,19 @@ class _ReturnFormState extends State<ReturnForm> {
     if (widget.initialImei != null && widget.initialImei!.isNotEmpty) {
       imeiList = widget.initialImei!.split(',').where((e) => e.trim().isNotEmpty).toList();
       isManualEntry = true;
+      
+      // ✅ Tái tạo imeiData khi edit
+      if (widget.initialPrice != null && widget.initialCurrency != null) {
+        final priceValue = double.tryParse(widget.initialPrice!) ?? 0;
+        final supplierIdValue = widget.initialSupplierId ?? '';
+        for (var imei in imeiList) {
+          imeiData[imei] = {
+            'price': priceValue,
+            'currency': widget.initialCurrency!,
+            'supplier_id': supplierIdValue,
+          };
+        }
+      }
     }
 
     _fetchInitialData();
@@ -172,10 +192,13 @@ class _ReturnFormState extends State<ReturnForm> {
           .toList()
         ..sort();
       
-      // Tạo map supplier name -> id
+      // Tạo map supplier name -> id và id -> name
       for (var s in supplierResponse) {
         if (s['name'] != null && s['id'] != null) {
-          supplierIdMap[s['name'] as String] = s['id'].toString();
+          final name = s['name'] as String;
+          final id = s['id'].toString();
+          supplierIdMap[name] = id;
+          supplierNameMap[id] = name;
         }
       }
 
@@ -195,10 +218,26 @@ class _ReturnFormState extends State<ReturnForm> {
           .toSet()
           .toList();
 
+      final warehouseResponse = await supabase.from('warehouses').select('id, name');
+      final warehouseList = warehouseResponse
+          .map((e) {
+            final id = e['id']?.toString();
+            final name = e['name'] as String?;
+            if (id != null && name != null) {
+              CacheUtil.cacheWarehouseName(id, name);
+              return {'id': id, 'name': name};
+            }
+            return null;
+          })
+          .whereType<Map<String, dynamic>>()
+          .toList()
+        ..sort((a, b) => (a['name'] as String).toLowerCase().compareTo((b['name'] as String).toLowerCase()));
+
       if (mounted) {
         setState(() {
           suppliers = supplierList;
           currencies = uniqueCurrencies;
+          warehouses = warehouseList;
           supplier = widget.initialSupplier != null && supplierList.contains(widget.initialSupplier) ? widget.initialSupplier : null;
           supplierController.text = supplier ?? '';
           isLoading = false;
@@ -316,53 +355,75 @@ class _ReturnFormState extends State<ReturnForm> {
     }
 
     int quantity = 0;
+    String? selectedWarehouseId;
 
     await showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Tự động lấy IMEI'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'Số lượng sản phẩm trả'),
-              onChanged: (val) => quantity = int.tryParse(val) ?? 0,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Tự động lấy IMEI'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(labelText: 'Số lượng sản phẩm trả'),
+                onChanged: (val) => quantity = int.tryParse(val) ?? 0,
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                value: selectedWarehouseId,
+                items: warehouses.map((w) => DropdownMenuItem(
+                  value: w['id'] as String,
+                  child: Text(w['name'] as String),
+                )).toList(),
+                decoration: const InputDecoration(
+                  labelText: 'Kho trả hàng',
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (val) => setDialogState(() => selectedWarehouseId = val),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Hủy'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                Navigator.pop(context);
+                if (quantity > 0 && selectedWarehouseId != null) {
+                  await _fetchImeisForQuantity(quantity, selectedWarehouseId!);
+                }
+              },
+              child: const Text('Xác nhận'),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Hủy'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              Navigator.pop(context);
-              if (quantity > 0) {
-                await _fetchImeisForQuantity(quantity);
-              }
-            },
-            child: const Text('Xác nhận'),
-          ),
-        ],
       ),
     );
   }
 
-  Future<void> _fetchImeisForQuantity(int quantity) async {
+  Future<void> _fetchImeisForQuantity(int quantity, String warehouseId) async {
     if (productId == null || quantity <= 0) {
       return;
     }
 
     try {
       final supabase = widget.tenantClient;
+      
+      // ✅ FIX: Lấy gấp đôi để đảm bảo đủ sau khi lọc duplicate
+      final fetchQuantity = quantity * 2;
+      
       final response = await supabase
           .from('products')
-          .select('imei, import_price, import_currency, supplier_id')
+          .select('imei, import_price, import_currency, supplier_id, import_date')
           .eq('product_id', productId!)
           .eq('status', 'Tồn kho')
-          .limit(quantity);
+          .eq('warehouse_id', warehouseId)
+          .order('import_date', ascending: true)  // ✅ FIX: FIFO - Lấy hàng cũ nhất trước
+          .limit(fetchQuantity);
 
       final imeiListFromDb = response
           .map((e) => {
@@ -374,27 +435,11 @@ class _ReturnFormState extends State<ReturnForm> {
           .where((e) => e['imei'] != null)
           .toList();
 
-      if (imeiListFromDb.length < quantity) {
-        if (mounted) {
-          await showDialog(
-            context: context,
-            builder: (context) => AlertDialog(
-              title: const Text('Thông báo'),
-              content: Text('Số lượng sản phẩm tồn kho không đủ! Chỉ có ${imeiListFromDb.length} sản phẩm "${CacheUtil.getProductName(productId)}" trong kho.'),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Đóng'),
-                ),
-              ],
-            ),
-          );
-        }
-        return;
-      }
-
+      // ✅ FIX: Lọc duplicate và lấy đúng số lượng
       final filteredImeis = <String>[];
       for (var item in imeiListFromDb) {
+        if (filteredImeis.length >= quantity) break;  // Đủ số lượng rồi
+        
         final imei = item['imei'] as String;
         if (!imeiList.contains(imei)) {
           filteredImeis.add(imei);
@@ -405,17 +450,80 @@ class _ReturnFormState extends State<ReturnForm> {
           };
         }
       }
-      filteredImeis.sort();
 
-      if (mounted) {
-        setState(() {
-          imeiList = filteredImeis;
-        });
+      // ✅ FIX: Better messaging khi không đủ số lượng
+      if (filteredImeis.length < quantity) {
+        // Kiểm tra tổng số lượng có trong kho
+        final totalCountResponse = await supabase
+            .from('products')
+            .select('imei')
+            .eq('product_id', productId!)
+            .eq('status', 'Tồn kho')
+            .eq('warehouse_id', warehouseId)
+            .count(CountOption.exact);
+        
+        final totalCount = totalCountResponse.count;
+        
+        if (mounted) {
+          await showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Thông báo'),
+              content: Text(
+                'Số lượng sản phẩm tồn kho không đủ!\n\n'
+                'Cần: $quantity sản phẩm\n'
+                'Có trong kho: $totalCount sản phẩm\n'
+                'Đã nhập: ${imeiList.length} sản phẩm\n'
+                'Có thể lấy thêm: ${filteredImeis.length} sản phẩm\n\n'
+                'Sản phẩm: "${CacheUtil.getProductName(productId)}"\n'
+                'Kho: "${CacheUtil.getWarehouseName(warehouseId)}"'
+              ),
+              actions: [
+                if (filteredImeis.isNotEmpty)
+                  TextButton(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      setState(() {
+                        imeiList.addAll(filteredImeis);
+                      });
+                    },
+                    child: Text('Lấy ${filteredImeis.length} sản phẩm'),
+                  ),
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Đóng'),
+                ),
+              ],
+            ),
+          );
+        }
+      } else {
+        // Đủ số lượng, thêm vào list
+        if (mounted) {
+          setState(() {
+            imeiList.addAll(filteredImeis);
+          });
+        }
       }
 
-      debugPrint('Fetched ${filteredImeis.length} IMEIs for quantity: $quantity');
+      debugPrint('Fetched ${filteredImeis.length} IMEIs for quantity: $quantity from warehouse: $warehouseId');
     } catch (e) {
       debugPrint('Error fetching IMEIs for quantity: $e');
+      if (mounted) {
+        await showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Lỗi'),
+            content: Text('Không thể tải IMEI: $e'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Đóng'),
+              ),
+            ],
+          ),
+        );
+      }
     }
   }
 
@@ -644,6 +752,7 @@ class _ReturnFormState extends State<ReturnForm> {
               'price': amount,
               'currency': itemCurrency,
               'supplier_id': itemSupplierId,
+              'supplier_name': supplierNameMap[itemSupplierId] ?? 'N/A',
               'note': note,
               'is_accessory': isAccessory,
               'imei_prefix': null,

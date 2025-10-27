@@ -6,6 +6,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:open_file/open_file.dart';
 import 'dart:io';
 import 'dart:developer' as developer;
+import '../helpers/export_progress_dialog.dart';
+import '../helpers/error_handler.dart';
 
 // Cache utility class
 class CacheUtil {
@@ -483,8 +485,11 @@ class _FixerDetailsDialogState extends State<FixerDetailsDialog> {
       final fixerName = widget.fixer['name']?.toString().trim() ?? '';
       developer.log('Fetching transactions for fixer: "$fixerName" (ID: $fixerId)');
 
+      final start = currentPage * pageSize;
+      final end = start + pageSize - 1;
+
       // Use fix_unit_id if available, otherwise fallback to fixer name
-      final fixSendOrdersQuery = fixerId != null
+      dynamic fixSendOrdersQuery = fixerId != null
           ? widget.tenantClient
               .from('fix_send_orders')
               .select('id, product_id, imei, quantity, note, created_at')
@@ -496,7 +501,7 @@ class _FixerDetailsDialogState extends State<FixerDetailsDialog> {
               .eq('fixer', fixerName)
               .eq('iscancelled', false);
 
-      final fixReceiveOrdersQuery = fixerId != null
+      dynamic fixReceiveOrdersQuery = fixerId != null
           ? widget.tenantClient
               .from('fix_receive_orders')
               .select('id, product_id, imei, quantity, price, currency, created_at, account, note, warehouse_id')
@@ -508,7 +513,7 @@ class _FixerDetailsDialogState extends State<FixerDetailsDialog> {
               .eq('fixer', fixerName)
               .eq('iscancelled', false);
 
-      final financialOrdersQuery = widget.tenantClient
+      dynamic financialOrdersQuery = widget.tenantClient
           .from('financial_orders')
           .select('id, amount, currency, created_at, account, note')
           .eq('partner_type', 'fix_units')
@@ -517,19 +522,24 @@ class _FixerDetailsDialogState extends State<FixerDetailsDialog> {
 
       // Add date filters if dates are selected
       if (startDate != null) {
-        fixSendOrdersQuery.gte('created_at', startDate!.toIso8601String());
-        fixReceiveOrdersQuery.gte('created_at', startDate!.toIso8601String());
-        financialOrdersQuery.gte('created_at', startDate!.toIso8601String());
+        fixSendOrdersQuery = fixSendOrdersQuery.gte('created_at', startDate!.toIso8601String());
+        fixReceiveOrdersQuery = fixReceiveOrdersQuery.gte('created_at', startDate!.toIso8601String());
+        financialOrdersQuery = financialOrdersQuery.gte('created_at', startDate!.toIso8601String());
       }
       if (endDate != null) {
         final endDateTime = endDate!.add(const Duration(days: 1));
-        fixSendOrdersQuery.lt('created_at', endDateTime.toIso8601String());
-        fixReceiveOrdersQuery.lt('created_at', endDateTime.toIso8601String());
-        financialOrdersQuery.lt('created_at', endDateTime.toIso8601String());
+        fixSendOrdersQuery = fixSendOrdersQuery.lt('created_at', endDateTime.toIso8601String());
+        fixReceiveOrdersQuery = fixReceiveOrdersQuery.lt('created_at', endDateTime.toIso8601String());
+        financialOrdersQuery = financialOrdersQuery.lt('created_at', endDateTime.toIso8601String());
       }
 
+      // Add order and range after all filters
+      fixSendOrdersQuery = fixSendOrdersQuery.order('created_at', ascending: false).range(start, end);
+      fixReceiveOrdersQuery = fixReceiveOrdersQuery.order('created_at', ascending: false).range(start, end);
+      financialOrdersQuery = financialOrdersQuery.order('created_at', ascending: false).range(start, end);
+
       developer.log('Executing queries for fixer: "$fixerName"');
-      final results = await Future.wait([
+      final results = await Future.wait<dynamic>([
         fixSendOrdersQuery,
         fixReceiveOrdersQuery,
         financialOrdersQuery,
@@ -564,6 +574,7 @@ class _FixerDetailsDialogState extends State<FixerDetailsDialog> {
 
       setState(() {
         transactions.addAll(newTransactions);
+        // ✅ Logic hasMoreData: nếu fetch được ít hơn pageSize thì không còn dữ liệu
         if (newTransactions.length < pageSize) {
           hasMoreData = false;
         }
@@ -580,18 +591,8 @@ class _FixerDetailsDialogState extends State<FixerDetailsDialog> {
   }
 
   List<Map<String, dynamic>> get filteredTransactions {
-    var filtered = transactions;
-
-    if (startDate != null && endDate != null) {
-      filtered = filtered.where((transaction) {
-        final transactionDate = DateTime.tryParse(transaction['created_at']?.toString() ?? '1900-01-01');
-        if (transactionDate == null) return false;
-        return transactionDate.isAfter(startDate!.subtract(const Duration(days: 1))) &&
-            transactionDate.isBefore(endDate!.add(const Duration(days: 1)));
-      }).toList();
-    }
-
-    return filtered;
+    // Không cần lọc lại ở đây vì đã lọc trong query database
+    return transactions;
   }
 
   Future<void> _selectDate(BuildContext context, bool isStart) async {
@@ -608,8 +609,9 @@ class _FixerDetailsDialogState extends State<FixerDetailsDialog> {
         } else {
           endDate = picked;
         }
-        hasMoreData = false;
       });
+      // ✅ Gọi lại fetch để áp dụng filter vào query
+      await _fetchTransactions();
     }
   }
 
@@ -620,6 +622,10 @@ class _FixerDetailsDialogState extends State<FixerDetailsDialog> {
       );
       return;
     }
+
+    // Hiển thị progress dialog
+    if (!mounted) return;
+    ExportProgressDialog.show(context);
 
     try {
       List<Map<String, dynamic>> exportTransactions = filteredTransactions;
@@ -633,11 +639,13 @@ class _FixerDetailsDialogState extends State<FixerDetailsDialog> {
                 .select('id, product_id, imei, quantity, note, created_at')
                 .eq('fix_unit_id', fixerId)
                 .eq('iscancelled', false)
+                .order('created_at', ascending: false)
             : widget.tenantClient
                 .from('fix_send_orders')
                 .select('id, product_id, imei, quantity, note, created_at')
                 .eq('fixer', fixerName)
-                .eq('iscancelled', false);
+                .eq('iscancelled', false)
+                .order('created_at', ascending: false);
 
         final fixReceiveOrdersFuture = fixerId != null
             ? widget.tenantClient
@@ -645,18 +653,21 @@ class _FixerDetailsDialogState extends State<FixerDetailsDialog> {
                 .select('id, product_id, imei, quantity, price, currency, created_at, account, note, warehouse_id')
                 .eq('fix_unit_id', fixerId)
                 .eq('iscancelled', false)
+                .order('created_at', ascending: false)
             : widget.tenantClient
                 .from('fix_receive_orders')
                 .select('id, product_id, imei, quantity, price, currency, created_at, account, note, warehouse_id')
                 .eq('fixer', fixerName)
-                .eq('iscancelled', false);
+                .eq('iscancelled', false)
+                .order('created_at', ascending: false);
 
         final financialOrdersFuture = widget.tenantClient
             .from('financial_orders')
             .select('id, amount, currency, created_at, account, note')
             .eq('partner_type', 'fix_units')
             .eq('partner_name', fixerName)
-            .eq('iscancelled', false);
+            .eq('iscancelled', false)
+            .order('created_at', ascending: false);
 
         final results = await Future.wait([
           fixSendOrdersFuture,
@@ -808,12 +819,17 @@ class _FixerDetailsDialogState extends State<FixerDetailsDialog> {
       }
       await file.writeAsBytes(excelBytes);
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Đã xuất file Excel: $filePath')),
-      );
+      // Đóng progress dialog
+      if (mounted) ExportProgressDialog.hide(context);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Đã xuất file Excel: $filePath')),
+        );
+      }
 
       final openResult = await OpenFile.open(filePath);
-      if (openResult.type != ResultType.done) {
+      if (openResult.type != ResultType.done && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Không thể mở file. File đã được lưu tại: $filePath'),
@@ -821,9 +837,21 @@ class _FixerDetailsDialogState extends State<FixerDetailsDialog> {
         );
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Lỗi khi xuất file Excel: $e')),
-      );
+      // Đóng progress dialog nếu có lỗi
+      if (mounted) ExportProgressDialog.hide(context);
+      
+      if (mounted) {
+        final shouldRetry = await ErrorHandler.showErrorDialog(
+          context: context,
+          title: 'Lỗi xuất Excel',
+          error: e,
+          showRetry: true,
+        );
+        
+        if (shouldRetry) {
+          await _exportToExcel();
+        }
+      }
     }
   }
 

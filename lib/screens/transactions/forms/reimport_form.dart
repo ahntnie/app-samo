@@ -909,10 +909,16 @@ class _ReimportFormState extends State<ReimportForm> {
 
           print('Inserting reimport order for IMEI ${item['imei']}, price: $reimportPrice');
 
+          // Get customer_id from customer name
+          final customerId = customerIdMap[item['customer']];
+          if (customerId == null) {
+            throw Exception('Không tìm thấy ID của khách hàng "${item['customer']}"!');
+          }
+
           await retry(
             () => supabase.from('reimport_orders').insert({
               'ticket_id': ticketId,
-              'customer': item['customer'],
+              'customer_id': int.parse(customerId),
               'product_id': item['product_id'],
               'warehouse_id': warehouseId,
               'imei': item['imei'],
@@ -1268,9 +1274,10 @@ class _ReimportFormState extends State<ReimportForm> {
         final reimportPrice = item['reimport_price'] != null
             ? (item['reimport_price'] is num ? (item['reimport_price'] as num).toDouble() : 0.0)
             : (item['sale_price'] is num ? (item['sale_price'] as num).toDouble() : 0.0);
+        final customerId = customerIdMap[item['customer']];
         return {
           'ticket_id': ticketId,
-          'customer': item['customer'],
+          'customer_id': customerId != null ? int.parse(customerId) : null,
           'product_id': item['product_id'],
           'product_name': item['product_name'],
           'warehouse_id': warehouseId,
@@ -1834,14 +1841,17 @@ class _ReimportFormState extends State<ReimportForm> {
     try {
       if (snapshotData['customers'] != null) {
         for (var customer in snapshotData['customers']) {
-          await retry(
-            () => supabase.from('customers').update({
-              'debt_vnd': customer['debt_vnd'],
-              'debt_cny': customer['debt_cny'],
-              'debt_usd': customer['debt_usd'],
-            }).eq('name', customer['name']),
-            operation: 'Rollback customer ${customer['name']}',
-          );
+          final customerId = customer['id']?.toString();
+          if (customerId != null) {
+            await retry(
+              () => supabase.from('customers').update({
+                'debt_vnd': customer['debt_vnd'],
+                'debt_cny': customer['debt_cny'],
+                'debt_usd': customer['debt_usd'],
+              }).eq('id', customerId),
+              operation: 'Rollback customer ${customer['name']} (id: $customerId)',
+            );
+          }
         }
       }
 

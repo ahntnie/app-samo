@@ -249,6 +249,8 @@ class _SaleSummaryState extends State<SaleSummary> {
     return NumberFormat('#,###', 'vi_VN').format(value).replaceAll(',', '.');
   }
 
+  // ⚠️ OLD CODE - Kept for reference (now handled by RPC auto-rollback)
+  // ignore: unused_element
   Future<void> _rollbackChanges(Map<String, dynamic> snapshot, String ticketId) async {
     final supabase = widget.tenantClient;
 
@@ -326,6 +328,8 @@ class _SaleSummaryState extends State<SaleSummary> {
     }
   }
 
+  // ⚠️ OLD CODE - Kept for reference (now handled by RPC)
+  // ignore: unused_element
   Future<bool> _verifyData(
     String ticketId,
     List<String> allImeis,
@@ -606,6 +610,7 @@ class _SaleSummaryState extends State<SaleSummary> {
         throw Exception('Vui lòng tạo phiếu đổi tiền để cập nhật tỉ giá');
       }
 
+      // Fetch products data for cost price calculation
       List<Map<String, dynamic>> productsDataBeforeUpdate = [];
       if (allImeis.isNotEmpty) {
         final response = await retry(
@@ -615,25 +620,13 @@ class _SaleSummaryState extends State<SaleSummary> {
         productsDataBeforeUpdate = List<Map<String, dynamic>>.from(response);
       }
 
+      // Create snapshot for rollback reference
       final snapshotData = await retry(
         () => _createSnapshot(ticketId, allImeis),
         operation: 'Create snapshot',
       );
 
-      try {
-        await retry(
-          () => supabase.from('snapshots').insert({
-            'ticket_id': ticketId,
-            'ticket_table': 'sale_orders',
-            'snapshot_data': snapshotData,
-            'created_at': now.toIso8601String(),
-          }),
-          operation: 'Insert snapshot',
-        );
-      } catch (e) {
-        throw Exception('Failed to insert snapshot: $e');
-      }
-
+      // Calculate prices for Ship COD
       double customerPricePerImei = 0;
       final Map<String, double> transporterPricePerImei = {};
       if (account == 'Ship COD') {
@@ -647,79 +640,55 @@ class _SaleSummaryState extends State<SaleSummary> {
         }
       }
 
-      final saleOrders = widget.ticketItems.map((item) {
+      // Prepare sale orders data with profit calculation
+      final List<Map<String, dynamic>> saleOrdersList = [];
+      for (var item in widget.ticketItems) {
         final imeiList = (item['imei'] as String).split(',').where((e) => e.trim().isNotEmpty).toList();
         final imeiCount = imeiList.length;
         final productData = productsDataBeforeUpdate.where((data) => imeiList.contains(data['imei'])).toList();
         final warehouseId = productData.isNotEmpty ? productData.first['warehouse_id'] as String? ?? '' : '';
-        final warehouseName = productData.isNotEmpty ? productData.first['warehouse_name'] as String? ?? '' : '';
-        return {
-          'ticket_id': ticketId,
+        
+        // Calculate profit for this item
+        final salePriceInVND = item['currency'] == 'CNY'
+            ? (item['price'] as double) * exchangeRate
+            : item['currency'] == 'USD'
+                ? (item['price'] as double) * exchangeRate
+                : item['price'] as double;
+        
+        double totalProfit = 0;
+        for (var imei in imeiList) {
+          final productInfo = productsDataBeforeUpdate.firstWhere(
+            (data) => data['imei'] == imei,
+            orElse: () => {'cost_price': 0},
+          );
+          final costPrice = double.tryParse(productInfo['cost_price'].toString()) ?? 0;
+          totalProfit += (salePriceInVND - costPrice);
+        }
+        
+        saleOrdersList.add({
           'customer_id': widget.customerId,
           'customer': widget.customerName,
           'product_id': item['product_id'],
           'product_name': item['product_name'],
           'warehouse_id': warehouseId,
-          'warehouse_name': warehouseName,
           'imei': item['imei'],
           'quantity': imeiCount,
           'price': item['price'],
           'currency': item['currency'],
           'account': account,
           'note': item['note'],
+          'saleman': widget.salesman,
+          'profit': totalProfit,
           'created_at': now.toIso8601String(),
-          if (account == 'Ship COD') ...{
-            'customer_price': depositValue,
-            'transporter_price': codAmount,
-            'transporter': transporter,
-          },
-        };
-      }).toList();
-
-      try {
-        for (var item in saleOrders) {
-          final imeiList = item['imei'].toString().split(',').where((e) => e.trim().isNotEmpty).toList();
-          final amount = item['price'] as double;
-
-          final profitResponse = await retry(
-            () => supabase.from('products').select('profit').inFilter('imei', imeiList),
-            operation: 'Fetch products profit',
-          );
-
-          final totalProfit =
-              profitResponse.map((e) => (e['profit'] as num?)?.toDouble() ?? 0.0).fold<double>(0.0, (sum, profit) => sum + profit);
-
-          await retry(
-            () => supabase.from('sale_orders').insert({
-              'ticket_id': ticketId,
-              'customer_id': item['customer_id'],
-              'customer': item['customer'],
-              'product_id': item['product_id'],
-              'product_name': item['product_name'],
-              'warehouse_id': item['warehouse_id'],
-              'imei': item['imei'],
-              'quantity': item['quantity'],
-              'price': amount,
-              'currency': item['currency'],
-              'account': item['account'],
-              'note': item['note'],
-              'saleman': widget.salesman,
-              'profit': totalProfit,
-              'created_at': item['created_at'],
-              if (account == 'Ship COD') ...{
-                'customer_price': item['customer_price'],
-                'transporter_price': item['transporter_price'],
-                'transporter': item['transporter'],
-              },
-            }),
-            operation: 'Insert sale order',
-          );
-        }
-      } catch (e) {
-        await _rollbackChanges(snapshotData, ticketId);
-        throw Exception('Failed to insert sale orders: $e');
+          'iscancelled': false,
+          'customer_price': account == 'Ship COD' ? depositValue : null,
+          'transporter_price': account == 'Ship COD' ? codAmount : null,
+          'transporter': account == 'Ship COD' ? transporter : null,
+        });
       }
 
+      // Prepare products updates
+      final List<Map<String, dynamic>> productsUpdatesList = [];
       for (var item in widget.ticketItems) {
         final imeiList = (item['imei'] as String).split(',').where((e) => e.trim().isNotEmpty).toList();
         final salePriceInVND = item['currency'] == 'CNY'
@@ -728,115 +697,93 @@ class _SaleSummaryState extends State<SaleSummary> {
                 ? (item['price'] as double) * exchangeRate
                 : item['price'] as double;
 
-        for (int i = 0; i < imeiList.length; i += maxBatchSize) {
-          final batchImeis = imeiList.sublist(i, math.min(i + maxBatchSize, imeiList.length));
-          final batchProductData = productsDataBeforeUpdate.where((data) => batchImeis.contains(data['imei'])).toList();
-          final costPrice = batchProductData.isNotEmpty ? (double.tryParse(batchProductData.first['cost_price'].toString()) ?? 0) : 0;
-          try {
-            await retry(
-              () => supabase.from('products').update({
-                'status': 'Đã bán',
-                'sale_date': now.toIso8601String(),
-                'saleman': widget.salesman,
-                'sale_price': salePriceInVND,
-                'profit': salePriceInVND - costPrice,
-                'customer': widget.customerName, // Add customer name to products table
-                if (account == 'Ship COD') ...{
-                  'customer_price': customerPricePerImei,
-                  'transporter_price': transporterPricePerImei[batchImeis.first] ?? 0,
-                  'transporter': transporter,
-                },
-              }).inFilter('imei', batchImeis),
-              operation: 'Update products batch $i',
-            );
-          } catch (e) {
-            await _rollbackChanges(snapshotData, ticketId);
-            throw Exception('Failed to update products batch $i: $e');
-          }
+        for (var imei in imeiList) {
+          final productInfo = productsDataBeforeUpdate.firstWhere(
+            (data) => data['imei'] == imei,
+            orElse: () => {'cost_price': 0},
+          );
+          final costPrice = double.tryParse(productInfo['cost_price'].toString()) ?? 0;
+          
+          productsUpdatesList.add({
+            'imei': imei,
+            'status': 'Đã bán',
+            'sale_date': now.toIso8601String(),
+            'saleman': widget.salesman,
+            'sale_price': salePriceInVND,
+            'profit': salePriceInVND - costPrice,
+            'customer': widget.customerName,
+            'customer_price': account == 'Ship COD' ? customerPricePerImei : null,
+            'transporter_price': account == 'Ship COD' ? (transporterPricePerImei[imei] ?? 0) : null,
+            'transporter': account == 'Ship COD' ? transporter : null,
+          });
         }
       }
 
+      // Prepare customer debt change
+      Map<String, dynamic>? customerDebtChange;
       if (account == 'Công nợ') {
-        try {
-          final currentCustomer = await retry(
-            () => supabase.from('customers').select('debt_vnd, debt_cny, debt_usd').eq('id', widget.customerId).single(),
-            operation: 'Fetch current customer debt',
-          );
-          String debtColumn;
-          if (widget.currency == 'VND') {
-            debtColumn = 'debt_vnd';
-          } else if (widget.currency == 'CNY') {
-            debtColumn = 'debt_cny';
-          } else if (widget.currency == 'USD') {
-            debtColumn = 'debt_usd';
-          } else {
-            throw Exception('Loại tiền tệ không được hỗ trợ: ${widget.currency}');
-          }
-          final currentDebt = double.tryParse(currentCustomer[debtColumn].toString()) ?? 0;
-          final updatedDebt = currentDebt + totalAmount;
-          await retry(
-            () => supabase.from('customers').update({debtColumn: updatedDebt}).eq('id', widget.customerId),
-            operation: 'Update customer debt',
-          );
-        } catch (e) {
-          await _rollbackChanges(snapshotData, ticketId);
-          throw Exception('Failed to update customer debt: $e');
-        }
+        customerDebtChange = {
+          'debt_vnd': widget.currency == 'VND' ? totalAmount : 0,
+          'debt_cny': widget.currency == 'CNY' ? totalAmount : 0,
+          'debt_usd': widget.currency == 'USD' ? totalAmount : 0,
+        };
       } else if (account == 'Ship COD') {
-        try {
-          final currentCustomer = await retry(
-            () => supabase.from('customers').select('debt_vnd').eq('id', widget.customerId).single(),
-            operation: 'Fetch current customer debt for Ship COD',
-          );
-          final currentCustomerDebt = double.tryParse(currentCustomer['debt_vnd'].toString()) ?? 0;
-          final updatedCustomerDebt = currentCustomerDebt + depositValue;
-          await retry(
-            () => supabase.from('customers').update({'debt_vnd': updatedCustomerDebt}).eq('id', widget.customerId),
-            operation: 'Update customer debt for Ship COD',
-          );
-
-          final currentTransporter = await supabase.from('transporters').select('debt').eq('name', transporter!).single();
-          final currentTransporterDebt = double.tryParse(currentTransporter['debt'].toString()) ?? 0;
-          final updatedTransporterDebt = currentTransporterDebt - codAmount;
-
-          await supabase.from('transporters').update({'debt': updatedTransporterDebt}).eq('name', transporter!);
-        } catch (e) {
-          await _rollbackChanges(snapshotData, ticketId);
-          throw Exception('Failed to update financial data for Ship COD: $e');
-        }
-      } else {
-        try {
-          final selectedAccount = accounts.firstWhere((acc) => acc['name'] == account);
-          final currentBalance = double.tryParse(selectedAccount['balance'].toString()) ?? 0;
-          final updatedBalance = currentBalance + totalAmount;
-          await retry(
-            () => supabase
-                .from('financial_accounts')
-                .update({'balance': updatedBalance})
-                .eq('name', account!)
-                .eq('currency', widget.currency),
-            operation: 'Update financial account balance',
-          );
-        } catch (e) {
-          await _rollbackChanges(snapshotData, ticketId);
-          throw Exception('Failed to update financial account: $e');
-        }
+        customerDebtChange = {
+          'debt_vnd': depositValue,
+          'debt_cny': 0,
+          'debt_usd': 0,
+        };
       }
 
-      final isDataValid = await _verifyData(
-        ticketId,
-        allImeis,
-        totalAmount,
-        depositValue,
-        codAmount,
-        snapshotData,
-        customerPricePerImei,
-        transporterPricePerImei,
+      // Prepare transporter debt change
+      double? transporterDebtChange;
+      if (account == 'Ship COD') {
+        transporterDebtChange = -codAmount; // Negative because transporter owes us
+      }
+
+      // Prepare account balance change
+      double? accountBalanceChange;
+      if (account != null && account != 'Công nợ' && account != 'Ship COD') {
+        accountBalanceChange = totalAmount; // Positive because money comes in
+      }
+
+      // Debug: Print data before RPC call
+      print('🔍 DEBUG: Calling RPC with data:');
+      print('  ticket_id: $ticketId');
+      print('  customer_id: ${widget.customerId}');
+      print('  sale_orders count: ${saleOrdersList.length}');
+      print('  products_updates count: ${productsUpdatesList.length}');
+      print('  customer_debt_change: $customerDebtChange');
+      print('  transporter_debt_change: $transporterDebtChange');
+      print('  account_balance_change: $accountBalanceChange');
+
+      // ✅ CALL RPC FUNCTION - All operations in ONE atomic transaction
+      final result = await retry(
+        () => supabase.rpc('create_sale_transaction', params: {
+          'p_ticket_id': ticketId,
+          'p_customer_id': widget.customerId,
+          'p_customer_name': widget.customerName,
+          'p_salesman': widget.salesman,
+          'p_account': account ?? '',
+          'p_currency': widget.currency,
+          'p_transporter': transporter,
+          'p_sale_orders': saleOrdersList,
+          'p_products_updates': productsUpdatesList,
+          'p_customer_debt_change': customerDebtChange,
+          'p_transporter_debt_change': transporterDebtChange,
+          'p_account_balance_change': accountBalanceChange,
+          'p_snapshot_data': snapshotData,
+          'p_created_at': now.toIso8601String(),
+        }),
+        operation: 'Create sale transaction (RPC)',
       );
-      if (!isDataValid) {
-        await _rollbackChanges(snapshotData, ticketId);
-        throw Exception('Dữ liệu không khớp sau khi cập nhật. Đã rollback thay đổi.');
+
+      // Check result
+      if (result == null || result['success'] != true) {
+        throw Exception('RPC function returned error: ${result?['message'] ?? 'Unknown error'}');
       }
+
+      print('✅ Sale transaction completed successfully: ${result['ticket_id']}');
 
       await NotificationService.showNotification(
         138,
@@ -866,15 +813,34 @@ class _SaleSummaryState extends State<SaleSummary> {
         Navigator.pop(context);
       }
     } catch (e) {
+      print('❌ ERROR: $e');
+      print('❌ ERROR TYPE: ${e.runtimeType}');
+      
       if (mounted) {
         setState(() {
           isProcessing = false;
         });
+        
+        // Show detailed error for debugging
+        String errorMessage = e.toString();
+        if (e is PostgrestException) {
+          errorMessage = 'PostgrestException:\n'
+              'Message: ${e.message}\n'
+              'Code: ${e.code}\n'
+              'Details: ${e.details}\n'
+              'Hint: ${e.hint}';
+        }
+        
         await showDialog(
           context: scaffoldContext,
           builder: (context) => AlertDialog(
-            title: const Text('Thông báo'),
-            content: Text('Lỗi khi tạo phiếu bán hàng: $e'),
+            title: const Text('Lỗi tạo phiếu bán hàng'),
+            content: SingleChildScrollView(
+              child: SelectableText(
+                errorMessage,
+                style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+              ),
+            ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context),

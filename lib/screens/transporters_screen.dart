@@ -5,7 +5,9 @@ import 'package:excel/excel.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:open_file/open_file.dart';
 import 'dart:io';
+import '../helpers/export_progress_dialog.dart';
 import 'dart:developer' as developer;
+import '../helpers/error_handler.dart';
 
 // Cache utility class
 class CacheUtil {
@@ -434,6 +436,7 @@ class _TransporterDetailsDialogState extends State<TransporterDetailsDialog> {
 
       setState(() {
         transactions.addAll(newTransactions);
+        // ✅ Logic hasMoreData: nếu fetch được ít hơn pageSize thì không còn dữ liệu
         if (newTransactions.length < pageSize) {
           hasMoreData = false;
         }
@@ -450,18 +453,8 @@ class _TransporterDetailsDialogState extends State<TransporterDetailsDialog> {
   }
 
   List<Map<String, dynamic>> get filteredTransactions {
-    var filtered = transactions;
-
-    if (startDate != null && endDate != null) {
-      filtered = filtered.where((transaction) {
-        final transactionDate = DateTime.tryParse(transaction['created_at']?.toString() ?? '1900-01-01');
-        if (transactionDate == null) return false;
-        return transactionDate.isAfter(startDate!.subtract(const Duration(days: 1))) &&
-            transactionDate.isBefore(endDate!.add(const Duration(days: 1)));
-      }).toList();
-    }
-
-    return filtered;
+    // Không cần lọc lại ở đây vì đã lọc trong query database
+    return transactions;
   }
 
   Future<void> _selectDate(BuildContext context, bool isStart) async {
@@ -478,8 +471,9 @@ class _TransporterDetailsDialogState extends State<TransporterDetailsDialog> {
         } else {
           endDate = picked;
         }
-        hasMoreData = false;
       });
+      // ✅ Gọi lại fetch để áp dụng filter vào query
+      await _fetchTransactions();
     }
   }
 
@@ -490,6 +484,10 @@ class _TransporterDetailsDialogState extends State<TransporterDetailsDialog> {
       );
       return;
     }
+
+    // Hiển thị progress dialog
+    if (!mounted) return;
+    ExportProgressDialog.show(context);
 
     try {
       List<Map<String, dynamic>> exportTransactions = filteredTransactions;
@@ -670,12 +668,17 @@ class _TransporterDetailsDialogState extends State<TransporterDetailsDialog> {
       }
       await file.writeAsBytes(excelBytes);
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Đã xuất file Excel: $filePath')),
-      );
+      // Đóng progress dialog
+      if (mounted) ExportProgressDialog.hide(context);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Đã xuất file Excel: $filePath')),
+        );
+      }
 
       final openResult = await OpenFile.open(filePath);
-      if (openResult.type != ResultType.done) {
+      if (openResult.type != ResultType.done && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Không thể mở file. File đã được lưu tại: $filePath'),
@@ -683,9 +686,21 @@ class _TransporterDetailsDialogState extends State<TransporterDetailsDialog> {
         );
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Lỗi khi xuất file Excel: $e')),
-      );
+      // Đóng progress dialog nếu có lỗi
+      if (mounted) ExportProgressDialog.hide(context);
+      
+      if (mounted) {
+        final shouldRetry = await ErrorHandler.showErrorDialog(
+          context: context,
+          title: 'Lỗi xuất Excel',
+          error: e,
+          showRetry: true,
+        );
+        
+        if (shouldRetry) {
+          await _exportToExcel();
+        }
+      }
     }
   }
 

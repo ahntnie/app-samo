@@ -411,7 +411,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
           'table': 'fix_receive_orders',
           'key': 'ticket_id',
           'select': 'ticket_id, created_at, fixer, fix_unit_id, price, quantity, currency, account, iscancelled, product_id, warehouse_id, imei',
-          'partnerField': 'fixer',
+          'partnerField': 'fix_unit_id',
           'amountField': 'price',
           'dateField': 'created_at',
           'snapshotKey': 'ticket_id',
@@ -421,7 +421,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
           'table': 'fix_send_orders',
           'key': 'ticket_id',
           'select': 'ticket_id, created_at, fixer, fix_unit_id, quantity, iscancelled, product_id, warehouse_id, imei',
-          'partnerField': 'fixer',
+          'partnerField': 'fix_unit_id',
           'amountField': null,
           'dateField': 'created_at',
           'snapshotKey': 'ticket_id',
@@ -430,8 +430,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
         {
           'table': 'import_orders',
           'key': 'id',
-          'select': 'id, created_at, supplier, supplier_id, price, quantity, total_amount, currency, account, iscancelled, product_id, warehouse_id, imei',
-          'partnerField': 'supplier',
+          'select': 'id, created_at, supplier_id, price, quantity, total_amount, currency, account, iscancelled, product_id, warehouse_id, imei',
+          'partnerField': 'supplier_id',
           'amountField': 'price',
           'dateField': 'created_at',
           'snapshotKey': 'id',
@@ -440,8 +440,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
         {
           'table': 'reimport_orders',
           'key': 'ticket_id',
-          'select': 'ticket_id, created_at, customer, price, quantity, currency, account, iscancelled, product_id, warehouse_id, imei',
-          'partnerField': 'customer',
+          'select': 'ticket_id, created_at, customer_id, price, quantity, currency, account, iscancelled, product_id, warehouse_id, imei',
+          'partnerField': 'customer_id',
           'amountField': 'price',
           'dateField': 'created_at',
           'snapshotKey': 'ticket_id',
@@ -450,8 +450,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
         {
           'table': 'sale_orders',
           'key': 'ticket_id',
-          'select': 'ticket_id, created_at, customer, price, quantity, currency, account, customer_price, transporter_price, transporter, iscancelled, product_id, warehouse_id, imei',
-          'partnerField': 'customer',
+          'select': 'ticket_id, created_at, customer_id, price, quantity, currency, account, customer_price, transporter_price, transporter, iscancelled, product_id, warehouse_id, imei, saleman',
+          'partnerField': 'customer_id',
           'amountField': 'price',
           'dateField': 'created_at',
           'snapshotKey': 'ticket_id',
@@ -460,8 +460,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
         {
           'table': 'return_orders',
           'key': 'ticket_id',
-          'select': 'ticket_id, created_at, supplier, supplier_id, price, quantity, total_amount, currency, account, iscancelled, product_id, warehouse_id, imei',
-          'partnerField': 'supplier',
+          'select': 'ticket_id, created_at, supplier_id, price, quantity, total_amount, currency, account, iscancelled, product_id, warehouse_id, imei',
+          'partnerField': 'supplier_id',
           'amountField': 'price',
           'dateField': 'created_at',
           'snapshotKey': 'ticket_id',
@@ -550,7 +550,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
           }
 
           if (!groupedTickets.containsKey(ticketKey)) {
-            // Lấy tên đối tác - đặc biệt xử lý cho financial_orders
+            // Lấy tên đối tác - đặc biệt xử lý cho các loại phiếu
             String partnerName;
             if (tableName == 'financial_orders') {
               partnerName = _getPartnerName(
@@ -558,6 +558,22 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 tx['partner_type']?.toString(),
                 tx[partnerField]?.toString(),
               );
+            } else if (tableName == 'import_orders' || tableName == 'return_orders') {
+              // Nhà cung cấp - dùng supplier_id
+              final supplierId = tx[partnerField]?.toString();
+              partnerName = supplierId != null ? (supplierMap[supplierId] ?? 'N/A') : 'N/A';
+            } else if (tableName == 'sale_orders' || tableName == 'reimport_orders') {
+              // Khách hàng - dùng customer_id
+              final customerId = tx[partnerField]?.toString();
+              partnerName = customerId != null ? (customerMap[customerId] ?? 'N/A') : 'N/A';
+            } else if (tableName == 'fix_send_orders' || tableName == 'fix_receive_orders') {
+              // Đơn vị fix - dùng fix_unit_id nếu có, nếu không dùng fixer (tên)
+              final fixUnitId = tx['fix_unit_id']?.toString();
+              if (fixUnitId != null) {
+                partnerName = fixerMap[fixUnitId] ?? 'N/A';
+              } else {
+                partnerName = tx[partnerField]?.toString() ?? 'N/A';
+              }
             } else {
               partnerName = tx[partnerField]?.toString() ?? 'N/A';
             }
@@ -581,7 +597,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
             };
           }
 
-          // Lấy tên đối tác cho item - đặc biệt xử lý cho financial_orders
+          // Lấy tên đối tác cho item - đặc biệt xử lý cho các loại phiếu
           String itemPartnerName;
           if (tableName == 'financial_orders') {
             itemPartnerName = _getPartnerName(
@@ -589,6 +605,22 @@ class _HistoryScreenState extends State<HistoryScreen> {
               tx['partner_type']?.toString(),
               tx[partnerField]?.toString(),
             );
+          } else if (tableName == 'import_orders' || tableName == 'return_orders') {
+            // Nhà cung cấp - dùng supplier_id
+            final supplierId = tx[partnerField]?.toString();
+            itemPartnerName = supplierId != null ? (supplierMap[supplierId] ?? 'N/A') : 'N/A';
+          } else if (tableName == 'sale_orders' || tableName == 'reimport_orders') {
+            // Khách hàng - dùng customer_id
+            final customerId = tx[partnerField]?.toString();
+            itemPartnerName = customerId != null ? (customerMap[customerId] ?? 'N/A') : 'N/A';
+          } else if (tableName == 'fix_send_orders' || tableName == 'fix_receive_orders') {
+            // Đơn vị fix - dùng fix_unit_id nếu có, nếu không dùng fixer (tên)
+            final fixUnitId = tx['fix_unit_id']?.toString();
+            if (fixUnitId != null) {
+              itemPartnerName = fixerMap[fixUnitId] ?? 'N/A';
+            } else {
+              itemPartnerName = tx[partnerField]?.toString() ?? 'N/A';
+            }
           } else {
             itemPartnerName = tx[partnerField]?.toString() ?? 'N/A';
           }
@@ -614,6 +646,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
             'product_name': productName,
             'warehouse_name': warehouseName,
             'partner': itemPartnerName, // Lưu partner cho từng item
+            'saleman': tx['saleman']?.toString(), // Lưu nhân viên bán
           };
 
           final ticket = groupedTickets[ticketKey]!;
@@ -683,11 +716,11 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
   void _showTransactionDetails(Map<String, dynamic> ticket) {
     String? saleman;
-    if (ticket['table'] == 'sale_orders' && ticket['snapshot_data']?['products'] is List<dynamic>) {
-      final products = ticket['snapshot_data']['products'] as List<dynamic>;
-      if (products.isNotEmpty) {
-        final salemanSet = products
-            .map((p) => p['saleman'])
+    if (ticket['table'] == 'sale_orders' && ticket['items'] is List<dynamic>) {
+      final items = ticket['items'] as List<dynamic>;
+      if (items.isNotEmpty) {
+        final salemanSet = items
+            .map((item) => item['saleman'])
             .whereType<String>()
             .where((s) => s.isNotEmpty)
             .toSet();
@@ -1214,19 +1247,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
         final tableName = ticket['table'] as String;
         final type = _getDisplayType(ticket['type'], tableName);
         final date = _formatDate(ticket['date']);
-        
-        String saleman = '';
-        if (tableName == 'sale_orders' && ticket['snapshot_data']?['products'] is List<dynamic>) {
-          final products = ticket['snapshot_data']['products'] as List<dynamic>;
-          if (products.isNotEmpty) {
-            final salemanSet = products
-                .map((p) => p['saleman'])
-                .whereType<String>()
-                .where((s) => s.isNotEmpty)
-                .toSet();
-            saleman = salemanSet.isNotEmpty ? salemanSet.join(', ') : '';
-          }
-        }
 
         // Create separate rows for each product in the ticket
         for (var item in ticket['items']) {
@@ -1243,6 +1263,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
           final account = (item['account'] != null && ticket['type'] != 'exchange' && ticket['type'] != 'payment' && ticket['type'] != 'transfer_fund')
               ? item['account'].toString()
               : '';
+          final saleman = item['saleman']?.toString() ?? '';
 
           sheet.appendRow([
             TextCellValue(type),

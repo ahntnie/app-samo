@@ -17,6 +17,7 @@ class NotificationService {
     SupabaseClient tenantClient, {
     String? tenantUrl,
     String? tenantAnonKey,
+    bool shouldGetFCMToken = false, // ✅ Chỉ lấy token khi đăng nhập lần đầu
   }) async {
     _tenantClient = tenantClient;
     _tenantUrl = tenantUrl;
@@ -107,17 +108,21 @@ class NotificationService {
       },
     );
 
-    // Lấy và lưu FCM token
-    try {
-      final fcmToken = await FirebaseMessaging.instance.getToken();
-      print('FCM token: $fcmToken');
-      if (fcmToken != null) {
-        await _saveDeviceToken(fcmToken);
-      } else {
-        print('Không thể lấy FCM token');
+    // ✅ CHỈ lấy và lưu FCM token khi đăng nhập lần đầu tiên
+    if (shouldGetFCMToken) {
+      try {
+        final fcmToken = await FirebaseMessaging.instance.getToken();
+        print('✅ FCM token (first login): $fcmToken');
+        if (fcmToken != null) {
+          await _saveDeviceToken(fcmToken);
+        } else {
+          print('Không thể lấy FCM token');
+        }
+      } catch (e) {
+        print('Lỗi khi lấy FCM token: $e');
       }
-    } catch (e) {
-      print('Lỗi khi lấy FCM token: $e');
+    } else {
+      print('⏭️ Skip FCM token retrieval (already logged in)');
     }
 
     // Lập lịch thông báo định kỳ
@@ -162,14 +167,12 @@ class NotificationService {
   }) async {
     try {
       print('Sending notification to all devices: $title - $body');
-
+      
       if (_tenantUrl == null || _tenantAnonKey == null) {
-        print(
-          'Error: Tenant credentials not set. Call NotificationService.init() first.',
-        );
+        print('Error: Tenant credentials not set. Call NotificationService.init() first.');
         return;
       }
-
+      
       // Gọi Edge Function từ main Supabase project (không phải tenant)
       final mainClient = Supabase.instance.client;
       final response = await mainClient.functions.invoke(
@@ -187,9 +190,7 @@ class NotificationService {
         final result = response.data;
         print('Notification sent successfully: ${jsonEncode(result)}');
       } else {
-        print(
-          'Error sending notification: ${response.status} - ${response.data}',
-        );
+        print('Error sending notification: ${response.status} - ${response.data}');
       }
     } catch (e) {
       print('Exception sending notification to all devices: $e');
@@ -234,7 +235,7 @@ class NotificationService {
             badge: true,
             sound: true,
           );
-
+          
       const AndroidNotificationDetails androidPlatformChannelSpecifics =
           AndroidNotificationDetails(
             'high_importance_channel',
@@ -294,8 +295,6 @@ class NotificationService {
     Function callback,
   ) async {
     await _flutterLocalNotificationsPlugin.zonedSchedule(
-      uiLocalNotificationDateInterpretation:
-          UILocalNotificationDateInterpretation.absoluteTime,
       id,
       title,
       body,

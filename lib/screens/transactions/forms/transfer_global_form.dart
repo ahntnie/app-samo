@@ -9,6 +9,31 @@ import '../../notification_service.dart';
 import 'package:flutter/services.dart';
 import '../../text_scanner_screen.dart';
 
+// Constants for batch processing
+const int maxBatchSize = 1000;
+const int maxRetries = 3;
+const Duration retryDelay = Duration(seconds: 1);
+
+/// Retries a function with exponential backoff
+Future<T> retry<T>(Future<T> Function() fn, {String? operation}) async {
+  for (int attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (attempt == maxRetries - 1) {
+        // On final attempt, throw with detailed error info
+        if (e is PostgrestException) {
+          throw Exception('${operation ?? 'Operation'} failed after $maxRetries attempts: PostgrestException(message: ${e.message}, code: ${e.code}, details: ${e.details}, hint: ${e.hint})');
+        }
+        throw Exception('${operation ?? 'Operation'} failed after $maxRetries attempts: $e');
+      }
+      // Exponential backoff
+      await Future.delayed(retryDelay * math.pow(2, attempt).toInt());
+    }
+  }
+  throw Exception('${operation ?? 'Operation'} failed: Unexpected error');
+}
+
 // Utility class for caching product names
 class CacheUtil {
   static final Map<String, String> productNameCache = {};
@@ -370,6 +395,7 @@ class _TransferGlobalFormState extends State<TransferGlobalForm> {
   Future<void> _showAutoImeiDialog() async {
     int? localQuantity;
     String? localWarehouseId;
+    String? selectedWarehouseId;
     final TextEditingController localQuantityController = TextEditingController();
     final TextEditingController localWarehouseController = TextEditingController();
 
@@ -407,6 +433,7 @@ class _TransferGlobalFormState extends State<TransferGlobalForm> {
                 onSelected: (val) {
                   if (val['id'].isEmpty) return;
                   localWarehouseId = val['id'] as String;
+                  selectedWarehouseId = val['id'] as String;
                   localWarehouseController.text = val['name'] as String;
                 },
                 fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
@@ -457,7 +484,7 @@ class _TransferGlobalFormState extends State<TransferGlobalForm> {
                 return;
               }
               Navigator.pop(dialogContext);
-              await _autoFetchImeis(localQuantity!, localWarehouseId!);
+              await _autoFetchImeis(localQuantity!, selectedWarehouseId!);
             },
             child: const Text('Tìm'),
           ),
@@ -474,29 +501,75 @@ class _TransferGlobalFormState extends State<TransferGlobalForm> {
 
     try {
       final supabase = widget.tenantClient;
+      
+      // ✅ FIX: Lấy gấp đôi để đảm bảo đủ sau khi lọc duplicate
+      final fetchQuantity = qty * 2;
+      
       final response = await supabase
           .from('products')
-          .select('imei')
+          .select('imei, import_date')
           .eq('product_id', productId!)
           .eq('warehouse_id', warehouseId)
           .eq('status', 'Tồn kho')
-          .order('import_date', ascending: true)
-          .limit(qty);
+          .order('import_date', ascending: true)  // FIFO - Lấy hàng cũ nhất trước
+          .limit(fetchQuantity);
 
       final fetchedImeis = response
           .map((e) => e['imei'] as String?)
           .whereType<String>()
-          .where((imei) => !imeiList.contains(imei))
+          .where((imei) => imei != null && imei.trim().isNotEmpty && !imeiList.contains(imei))
+          .cast<String>()
+          .take(qty)  // ✅ FIX: Chỉ lấy đúng số lượng sau khi lọc
           .toList();
 
       if (fetchedImeis.length < qty) {
+        // Check tổng số lượng có trong kho
+        final totalCountResponse = await supabase
+            .from('products')
+            .select('imei')
+            .eq('product_id', productId!)
+            .eq('warehouse_id', warehouseId)
+            .eq('status', 'Tồn kho')
+            .count(CountOption.exact);
+        
+        final totalCount = totalCountResponse.count;
+        
         if (mounted) {
-          showDialog(
+          await showDialog(
             context: context,
             builder: (ctx) => AlertDialog(
               title: const Text('Thông báo'),
-              content: Text('Kho ${CacheUtil.getWarehouseName(warehouseId)} chỉ có ${fetchedImeis.length} sản phẩm "${CacheUtil.getProductName(productId)}" ở trạng thái Tồn kho. Không đủ số lượng $qty.'),
-              actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Đóng'))],
+              content: Text(
+                'Số lượng sản phẩm tồn kho không đủ!\n\n'
+                'Cần: $qty sản phẩm\n'
+                'Có trong kho: $totalCount sản phẩm\n'
+                'Đã nhập: ${imeiList.length} sản phẩm\n'
+                'Có thể lấy thêm: ${fetchedImeis.length} sản phẩm\n\n'
+                'Sản phẩm: "${CacheUtil.getProductName(productId)}"\n'
+                'Kho: "${CacheUtil.getWarehouseName(warehouseId)}"'
+              ),
+              actions: [
+                if (fetchedImeis.isNotEmpty)
+                  TextButton(
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      setState(() {
+                        imeiList.addAll(fetchedImeis);
+                        isLoading = false;
+                      });
+                    },
+                    child: Text('Lấy ${fetchedImeis.length} sản phẩm'),
+                  ),
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    setState(() {
+                      isLoading = false;
+                    });
+                  },
+                  child: const Text('Đóng'),
+                ),
+              ],
             ),
           );
         }
@@ -507,7 +580,7 @@ class _TransferGlobalFormState extends State<TransferGlobalForm> {
       }
 
       setState(() {
-        imeiList = fetchedImeis;
+        imeiList.addAll(fetchedImeis);
         isLoading = false;
       });
     } catch (e) {
@@ -516,7 +589,7 @@ class _TransferGlobalFormState extends State<TransferGlobalForm> {
           context: context,
           builder: (ctx) => AlertDialog(
             title: const Text('Lỗi'),
-            content: Text('$e'),
+            content: Text('Không thể tải IMEI: $e'),
             actions: [TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Đóng'))],
           ),
         );
@@ -623,54 +696,34 @@ class _TransferGlobalFormState extends State<TransferGlobalForm> {
       developer.log('Creating snapshot for ticket $ticketId with ${imeiList.length} IMEIs');
       final snapshotData = await _createSnapshot(ticketId, imeiList);
 
-      // Prepare transporter order data
-      final transporterOrder = {
-        'id': ticketId,
-        'imei': imeiList.join(','),
-        'product_id': productId,
-        'transporter': transporter,
-        'transport_fee': 0,
-        'type': 'chuyển kho quốc tế',
-        'created_at': now.toIso8601String(),
-        'iscancelled': false,
-      };
+      // Debug logging
+      developer.log('🔍 DEBUG: Calling transfer_global RPC with data:');
+      developer.log('  ticket_id: $ticketId');
+      developer.log('  product_id: $productId');
+      developer.log('  product_name: ${CacheUtil.getProductName(productId)}');
+      developer.log('  transporter: $transporter');
+      developer.log('  imei_list count: ${imeiList.length}');
 
-      // Prepare batch updates for products
-      const batchSize = 1000;
-      final batches = <List<String>>[];
-      developer.log('Preparing batches for ${imeiList.length} IMEIs with batch size $batchSize');
-      for (var i = 0; i < imeiList.length; i += batchSize) {
-        final endIndex = math.min(i + batchSize, imeiList.length);
-        batches.add(imeiList.sublist(i, endIndex));
-        developer.log('Created batch from index $i to $endIndex with ${batches.last.length} IMEIs');
+      // ✅ CALL RPC FUNCTION - All operations in ONE atomic transaction
+      final result = await retry(
+        () => supabase.rpc('create_transfer_global_transaction', params: {
+          'p_ticket_id': ticketId,
+          'p_product_id': productId,
+          'p_product_name': CacheUtil.getProductName(productId),
+          'p_transporter': transporter,
+          'p_imei_list': imeiList,
+          'p_snapshot_data': snapshotData,
+          'p_created_at': now.toIso8601String(),
+        }),
+        operation: 'Create transfer global transaction (RPC)',
+      );
+
+      // Check result
+      if (result == null || result['success'] != true) {
+        throw Exception('RPC function returned error: ${result?['message'] ?? 'Unknown error'}');
       }
 
-      // Execute operations directly instead of using execute_transaction RPC
-      developer.log('Executing operations with ${batches.length} batches');
-
-      // Insert snapshot
-      await supabase.from('snapshots').insert({
-        'ticket_id': ticketId,
-        'ticket_table': 'transporter_orders',
-        'snapshot_data': snapshotData,
-        'created_at': now.toIso8601String(),
-      });
-
-      // Insert transporter order
-      await supabase.from('transporter_orders').insert(transporterOrder);
-
-      // Update products in batches
-      for (var batch in batches) {
-        developer.log('Updating products for batch with ${batch.length} IMEIs');
-        await supabase
-            .from('products')
-            .update({
-              'status': 'đang vận chuyển',
-              'transporter': transporter,
-              'send_transfer_date': now.toIso8601String(),
-            })
-            .inFilter('imei', batch);
-      }
+      developer.log('✅ Transfer global transaction created successfully via RPC!');
 
       // Send push notification
       await NotificationService.showNotification(
@@ -695,18 +748,21 @@ class _TransferGlobalFormState extends State<TransferGlobalForm> {
           ),
         );
 
-        setState(() {
-          transporter = null;
-          productId = null;
-          imei = '';
-          productController.text = '';
-          imeiController.text = '';
-          imeiList = [];
-          imeiError = null;
-          isSubmitting = false;
-        });
-
-        await _fetchInitialData();
+        // Reset sau khi đóng dialog
+        if (mounted) {
+          setState(() {
+            transporter = null;
+            productId = null;
+            imei = '';
+            imeiList.clear(); // Use clear() instead of = []
+            imeiError = null;
+            isSubmitting = false;
+          });
+          
+          // Clear controllers
+          productController.clear();
+          imeiController.clear();
+        }
       }
     } catch (e) {
       print('Error saving transfer: $e');

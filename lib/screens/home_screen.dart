@@ -18,17 +18,20 @@ import 'excel_report_screen.dart';
 import 'orders_screen.dart';
 import 'categories_screen.dart';
 import 'package:firebase_core/firebase_core.dart';
+import '../helpers/global_cache_manager.dart';
 
 class HomeScreen extends StatefulWidget {
   final SupabaseClient tenantClient;
   final String? tenantUrl;
   final String? tenantAnonKey;
+  final bool isFirstLogin; // ✅ Flag để biết có phải đăng nhập lần đầu không
 
   const HomeScreen({
     super.key,
     required this.tenantClient,
     this.tenantUrl,
     this.tenantAnonKey,
+    this.isFirstLogin = false, // ✅ Default false
   });
 
   @override
@@ -45,6 +48,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String? loggedInUsername;
   bool isPasswordHidden = true;
   bool rememberMe = true;
+  bool isAutoLoginInProgress = false; // ✅ Flag để biết đang auto-login
 
   final List<String> allPermissions = [
     'admin',
@@ -91,9 +95,28 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    _initializeNotifications();
-    _loadSavedPreferences();
-    _checkAutoLogin();
+    _initializeApp(); // ✅ Gọi function khởi tạo theo thứ tự đúng
+    _startBackgroundSync();
+  }
+  
+  // ✅ Khởi tạo app theo thứ tự: load preferences → check auto-login → init notifications
+  Future<void> _initializeApp() async {
+    await _loadSavedPreferences(); // ✅ Load trước
+    await _checkAutoLogin(); // ✅ Check auto-login sau khi đã có preferences
+    await _initializeNotifications();
+  }
+
+  void _startBackgroundSync() {
+    // Start background cache sync
+    GlobalCacheManager().startBackgroundSync(widget.tenantClient);
+    print('🔄 Background cache sync started');
+  }
+
+  @override
+  void dispose() {
+    // Stop background sync when leaving screen
+    GlobalCacheManager().stopBackgroundSync();
+    super.dispose();
   }
 
   Future<void> _initializeNotifications() async {
@@ -103,6 +126,7 @@ class _HomeScreenState extends State<HomeScreen> {
       widget.tenantClient,
       tenantUrl: widget.tenantUrl,
       tenantAnonKey: widget.tenantAnonKey,
+      shouldGetFCMToken: widget.isFirstLogin, // ✅ CHỈ lấy token khi đăng nhập lần đầu
     );
   }
 
@@ -122,15 +146,30 @@ class _HomeScreenState extends State<HomeScreen> {
     final prefs = await SharedPreferences.getInstance();
     final savedUsername = prefs.getString('home_username');
     final savedPassword = prefs.getString('home_password');
-    final rememberPassword = prefs.getBool('home_rememberPassword') ?? false;
+    final savedRememberPassword = prefs.getBool('home_rememberPassword') ?? false;
     final hasDatabaseSession = prefs.getBool('has_database_session') ?? false;
 
-    if (savedUsername != null && savedPassword != null && rememberPassword && hasDatabaseSession) {
-      // Tự động đăng nhập tài khoản nhân sự
+    print('🔍 Auto-login check: username=$savedUsername, hasDatabaseSession=$hasDatabaseSession, rememberPassword=$savedRememberPassword');
+
+    // ✅ Nếu đã có database session (đã đăng nhập tài khoản nhân sự trước đó)
+    if (hasDatabaseSession && savedUsername != null && savedPassword != null && savedRememberPassword) {
+      // ✅ Tự động đăng nhập tài khoản nhân sự KHÔNG HIỂN thị form đăng nhập
+      print('✅ Auto-login sub-account: $savedUsername');
+      setState(() {
+        isAutoLoginInProgress = true; // ✅ Đánh dấu đang auto-login
+      });
+      
       usernameController.text = savedUsername;
       passwordController.text = savedPassword;
+      
+      // ✅ Gọi loginSubAccount() để authenticate
       await loginSubAccount();
+      
+      setState(() {
+        isAutoLoginInProgress = false; // ✅ Hoàn thành auto-login
+      });
     } else {
+      print('⏭️ No auto-login: showing login screen');
       // Kiểm tra nếu tài khoản chính là admin
       await _checkAdminAccount();
     }
@@ -180,6 +219,7 @@ class _HomeScreenState extends State<HomeScreen> {
     if (rememberMe) {
       await prefs.setString('home_username', usernameController.text.trim());
       await prefs.setString('home_password', passwordController.text.trim());
+      print('✅ Saved sub-account credentials: ${usernameController.text.trim()}');
     } else {
       await prefs.remove('home_username');
       await prefs.remove('home_password');
@@ -228,9 +268,18 @@ class _HomeScreenState extends State<HomeScreen> {
         }
       }
 
+      // ✅ Luôn lưu preferences khi đăng nhập thành công
       await _savePreferences();
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('has_database_session', true);
+      
+      // ✅ Nếu checkbox "Nhớ mật khẩu" được chọn, lưu credentials
+      if (rememberMe) {
+        await prefs.setString('home_username', usernameController.text.trim());
+        await prefs.setString('home_password', passwordController.text.trim());
+        await prefs.setBool('home_rememberPassword', true);
+        print('✅ Saved credentials for auto-login: ${usernameController.text.trim()}');
+      }
       
       setState(() {
         loggedInUsername = response['username'].toString();
@@ -271,6 +320,7 @@ class _HomeScreenState extends State<HomeScreen> {
     await prefs.setBool('home_rememberPassword', false);
     await prefs.remove('tenant_url');
     await prefs.remove('tenant_anon_key');
+    await prefs.setBool('has_logged_in', false); // ✅ Xóa flag đã đăng nhập
     await prefs.remove('login_email');
     await prefs.remove('login_password');
     await prefs.setBool('login_rememberPassword', false);
@@ -334,6 +384,27 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // ✅ Nếu đang auto-login, hiển thị loading screen
+    if (isAutoLoginInProgress) {
+      return Scaffold(
+        backgroundColor: const Color(0xFF121826),
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const CircularProgressIndicator(color: Colors.white),
+              const SizedBox(height: 16),
+              Text(
+                'Đang tự động đăng nhập...',
+                style: const TextStyle(color: Colors.white70, fontSize: 16),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    
+    // ✅ Nếu chưa đăng nhập và không phải đang auto-login, hiển thị form đăng nhập
     if (!isSubAccountLoggedIn) {
       return Scaffold(
         backgroundColor: const Color(0xFF121826),

@@ -5,6 +5,32 @@ import 'package:intl/intl.dart';
 import '../../notification_service.dart';
 import 'return_form.dart';
 import 'dart:math' as math;
+import '../../../../helpers/error_handler.dart';
+
+// Constants for batch processing
+const int maxBatchSize = 1000;
+const int maxRetries = 3;
+const Duration retryDelay = Duration(seconds: 1);
+
+/// Retries a function with exponential backoff
+Future<T> retry<T>(Future<T> Function() fn, {String? operation}) async {
+  for (int attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (attempt == maxRetries - 1) {
+        // On final attempt, throw with detailed error info
+        if (e is PostgrestException) {
+          throw Exception('${operation ?? 'Operation'} failed after $maxRetries attempts: PostgrestException(message: ${e.message}, code: ${e.code}, details: ${e.details}, hint: ${e.hint})');
+        }
+        throw Exception('${operation ?? 'Operation'} failed after $maxRetries attempts: $e');
+      }
+      // Exponential backoff
+      await Future.delayed(retryDelay * math.pow(2, attempt).toInt());
+    }
+  }
+  throw Exception('${operation ?? 'Operation'} failed: Unexpected error');
+}
 
 class ReturnSummary extends StatefulWidget {
   final SupabaseClient tenantClient;
@@ -246,170 +272,58 @@ class _ReturnSummaryState extends State<ReturnSummary> {
     return true;
   }
 
-  Future<void> _rollbackChanges(Map<String, dynamic> snapshot, String ticketId) async {
+  /// ✅ NEW: Validate return prices against import prices
+  Future<Map<String, dynamic>> _validateReturnPrices() async {
     final supabase = widget.tenantClient;
-    
-    try {
-      // Rollback suppliers
-      if (snapshot['suppliers'] != null) {
-        final suppliersData = snapshot['suppliers'];
-        if (suppliersData is List) {
-          for (var supplierData in suppliersData) {
-            await supabase
-              .from('suppliers')
-              .update(supplierData)
-              .eq('name', supplierData['name']);
-          }
-        } else {
-          // Backward compatibility for old snapshots
-          await supabase
-            .from('suppliers')
-            .update(suppliersData)
-            .eq('name', widget.supplier);
-        }
-      }
+    final warnings = <String>[];
+    int totalOverpriced = 0;
+    num totalLoss = 0;
 
-      // Rollback financial accounts
-      if (snapshot['financial_accounts'] != null && account != null) {
-        await supabase
-          .from('financial_accounts')
-          .update(snapshot['financial_accounts'])
-          .eq('name', account!)
-          .inFilter('currency', widget.ticketItems.map((e) => e['currency']).toList());
-      }
+    for (final item in widget.ticketItems) {
+      final imeiList = (item['imei'] as String).split(',').where((e) => e.trim().isNotEmpty).toList();
+      final returnPrice = (item['price'] as num?) ?? 0;
+      final returnCurrency = item['currency'] as String? ?? 'VND';
+      final productName = item['product_name'] as String? ?? 'Sản phẩm';
 
-      // Rollback products
-      if (snapshot['products'] != null) {
-        for (var product in snapshot['products']) {
-          await supabase
-            .from('products')
-            .update(product)
-            .eq('imei', product['imei']);
-        }
-      }
+      if (imeiList.isEmpty) continue;
 
-      // Delete created return orders
-      await supabase
-        .from('return_orders')
-        .delete()
-        .eq('ticket_id', ticketId);
-
-    } catch (e) {
-      print('Error during rollback: $e');
-      throw Exception('Lỗi khi rollback dữ liệu: $e');
-    }
-  }
-
-  Future<bool> _verifyData(String ticketId, List<String> imeiList) async {
-    final supabase = widget.tenantClient;
-    
-    try {
-      // Verify supplier data
-      final supplierData = await supabase
-          .from('suppliers')
-          .select()
-          .eq('name', widget.supplier)
-          .single();
-      
-      // Verify products data
-      final productsData = await supabase
+      // Get import prices for all IMEIs
+      final imeiResponse = await supabase
           .from('products')
-          .select('status')
+          .select('imei, import_price, import_currency')
           .inFilter('imei', imeiList);
-      
-      // Verify return orders
-      final returnOrders = await supabase
-          .from('return_orders')
-          .select()
-          .eq('ticket_id', ticketId);
 
-      // Verify all IMEIs are marked as returned
-      for (var product in productsData) {
-        if (product['status'] != 'Đã trả ncc') {
-          return false;
+      for (var product in imeiResponse) {
+        final imei = product['imei'] as String;
+        final importPrice = (product['import_price'] as num?) ?? 0;
+        final importCurrency = product['import_currency'] as String? ?? 'VND';
+
+        // Only compare if same currency
+        if (returnCurrency == importCurrency && returnPrice > importPrice) {
+          totalOverpriced++;
+          final loss = returnPrice - importPrice;
+          totalLoss += loss;
+          warnings.add(
+            '• $productName (${imei.substring(0, imei.length > 8 ? 8 : imei.length)}...): '
+            'Giá trả ${_formatCurrency(returnPrice, returnCurrency)} '
+            '> Giá nhập ${_formatCurrency(importPrice, importCurrency)} '
+            '(Lỗ: ${_formatCurrency(loss, returnCurrency)})'
+          );
         }
       }
-
-      // Verify all return orders are created
-      if (returnOrders.length != widget.ticketItems.length) {
-        return false;
-      }
-
-      // Verify financial account if used
-      if (account != null && account != 'Công nợ') {
-        final accountData = await supabase
-            .from('financial_accounts')
-            .select()
-            .eq('name', account!)
-            .inFilter('currency', widget.ticketItems.map((e) => e['currency']).toList())
-            .single();
-      }
-
-      return true;
-    } catch (e) {
-      print('Error during data verification: $e');
-      return false;
     }
+
+    return {
+      'hasWarning': warnings.isNotEmpty,
+      'warnings': warnings,
+      'totalOverpriced': totalOverpriced,
+      'totalLoss': totalLoss,
+    };
   }
 
-  Future<void> _processTicket() async {
-    if (isProcessing) return;
-
-    setState(() {
-      isProcessing = true;
-      errorMessage = null;
-    });
-
-    final ticketId = DateTime.now().millisecondsSinceEpoch.toString();
-    final allImeis = widget.ticketItems
-        .expand((item) => (item['imei'] as String)
-            .split(',')
-            .where((e) => e.trim().isNotEmpty))
-        .toList();
-
-    // Create snapshot before any changes
-    Map<String, dynamic> snapshot;
-    try {
-      snapshot = await _createSnapshot(ticketId, allImeis);
-    } catch (e) {
-      setState(() {
-        isProcessing = false;
-        errorMessage = 'Lỗi khi tạo snapshot: $e';
-      });
-      return;
-    }
-
-    try {
-      // Existing processing logic here
-      // ... (keep your current _processTicket implementation)
-
-      // After all updates, verify the data
-      final isDataValid = await _verifyData(ticketId, allImeis);
-      if (!isDataValid) {
-        // If data verification fails, rollback changes
-        await _rollbackChanges(snapshot, ticketId);
-        throw Exception('Dữ liệu không khớp sau khi cập nhật. Đã rollback thay đổi.');
-      }
-
-      // If everything is successful, show success message
-      if (mounted) {
-        Navigator.of(context).pop(true);
-      }
-    } catch (e) {
-      // If any error occurs, rollback changes
-      try {
-        await _rollbackChanges(snapshot, ticketId);
-      } catch (rollbackError) {
-        print('Rollback failed: $rollbackError');
-      }
-
-      if (mounted) {
-        setState(() {
-          isProcessing = false;
-          errorMessage = e.toString();
-        });
-      }
-    }
+  String _formatCurrency(num amount, String currency) {
+    final formatted = numberFormat.format(amount).replaceAll(',', '.');
+    return '$formatted $currency';
   }
 
   void showConfirmDialog(BuildContext scaffoldContext) async {
@@ -537,6 +451,104 @@ class _ReturnSummaryState extends State<ReturnSummary> {
       return;
     }
 
+    // ✅ NEW: Kiểm tra giá trả so với giá nhập
+    try {
+      final priceValidation = await _validateReturnPrices();
+      if (priceValidation['hasWarning'] == true) {
+        if (mounted) {
+          Navigator.pop(scaffoldContext); // Đóng dialog "Đang xử lý"
+          
+          // Hiển thị cảnh báo với option tiếp tục hoặc hủy
+          final shouldContinue = await showDialog<bool>(
+            context: scaffoldContext,
+            builder: (context) => AlertDialog(
+              title: const Row(
+                children: [
+                  Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 28),
+                  SizedBox(width: 8),
+                  Text('Cảnh báo: Giá Trả Cao'),
+                ],
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Phát hiện ${priceValidation['totalOverpriced']} sản phẩm có giá trả cao hơn giá nhập, '
+                      'gây lỗ tổng cộng: ${_formatCurrency(priceValidation['totalLoss'], widget.currency)}',
+                      style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.red),
+                    ),
+                    const SizedBox(height: 12),
+                    const Text('Chi tiết:', style: TextStyle(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    ...(priceValidation['warnings'] as List<String>).map((warning) => 
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Text(warning, style: const TextStyle(fontSize: 13)),
+                      )
+                    ),
+                    const SizedBox(height: 12),
+                    const Text(
+                      'Điều này có thể do:\n'
+                      '• Nhập sai giá trả\n'
+                      '• NCC đồng ý đổi giá\n'
+                      '• Trả hàng có chi phí phát sinh',
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Bạn có chắc chắn muốn tiếp tục?',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('Hủy - Kiểm tra lại', style: TextStyle(color: Colors.grey)),
+                ),
+                ElevatedButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.orange,
+                  ),
+                  child: const Text('Xác nhận - Tiếp tục'),
+                ),
+              ],
+            ),
+          );
+
+          if (shouldContinue != true) {
+            // User chose to cancel
+            return;
+          }
+          
+          // User confirmed, show processing dialog again
+          if (mounted) {
+            showDialog(
+              context: scaffoldContext,
+              barrierDismissible: false,
+              builder: (context) => const AlertDialog(
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircularProgressIndicator(),
+                    SizedBox(height: 16),
+                    Text('Vui lòng chờ xử lý dữ liệu.'),
+                  ],
+                ),
+              ),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Error validating return prices: $e');
+      // Non-blocking error, continue with ticket creation
+    }
+
     if (!mounted) {
       Navigator.pop(scaffoldContext); // Đóng dialog "Đang xử lý"
       return;
@@ -558,16 +570,9 @@ class _ReturnSummaryState extends State<ReturnSummary> {
       // Tạo snapshot trước khi thay đổi dữ liệu
       debugPrint('Creating snapshot for IMEIs: $allImeis');
       final snapshotData = await _createSnapshot(ticketId, allImeis);
-      debugPrint('Inserting snapshot');
-      await supabase.from('snapshots').insert({
-        'ticket_id': ticketId,
-        'ticket_table': 'return_orders',
-        'snapshot_data': snapshotData,
-        'created_at': now.toIso8601String(),
-      });
 
-      debugPrint('Inserting return_orders');
-      await supabase.from('return_orders').insert(widget.ticketItems.map((item) {
+      // Prepare return orders list
+      final returnOrdersList = widget.ticketItems.map((item) {
         final imeiList = (item['imei'] as String).split(',').where((e) => e.trim().isNotEmpty).toList();
         return {
           'ticket_id': ticketId,
@@ -583,21 +588,134 @@ class _ReturnSummaryState extends State<ReturnSummary> {
           'total_amount': (item['price'] as num) * imeiList.length,
           'created_at': now.toIso8601String(),
         };
-      }).toList());
+      }).toList();
 
-      // Update product status to "Đã trả ncc" instead of deleting
+      // Prepare products updates
+      final productsUpdatesList = <Map<String, dynamic>>[];
       for (final item in widget.ticketItems) {
         final imeiList = (item['imei'] as String).split(',').where((e) => e.trim().isNotEmpty).toList();
-        if (imeiList.isNotEmpty) {
-          debugPrint('Updating products with IMEIs to status "Đã trả ncc": $imeiList');
-          for (int i = 0; i < imeiList.length; i += batchSize) {
-            final batchImeis = imeiList.sublist(i, i + batchSize < imeiList.length ? i + batchSize : imeiList.length);
-            await supabase.from('products')
-              .update({
-                'status': 'Đã trả ncc',
-                'return_date': now.toIso8601String(),
-              })
-              .inFilter('imei', batchImeis);
+        for (var imei in imeiList) {
+          productsUpdatesList.add({
+            'imei': imei,
+            'status': 'Đã trả ncc',
+            'return_date': now.toIso8601String(),
+          });
+        }
+      }
+
+      // Prepare suppliers debt changes
+      final suppliersDebtChangesList = <Map<String, dynamic>>[];
+      if (account == 'Công nợ') {
+        // Nhóm items theo supplier_id
+        final supplierGroups = <String, List<Map<String, dynamic>>>{};
+        for (var item in widget.ticketItems) {
+          final supplierId = item['supplier_id']?.toString();
+          if (supplierId != null && supplierId.isNotEmpty) {
+            supplierGroups.putIfAbsent(supplierId, () => []).add(item);
+          }
+        }
+
+        // Tính debt change cho từng supplier
+        for (var supplierEntry in supplierGroups.entries) {
+          final supplierId = supplierEntry.key;
+          final items = supplierEntry.value;
+
+          double debtVnd = 0;
+          double debtCny = 0;
+          double debtUsd = 0;
+
+          for (var item in items) {
+            final imeiCount = (item['imei'] as String).split(',').where((e) => e.trim().isNotEmpty).length;
+            final totalAmount = (item['price'] as num).toDouble() * imeiCount;
+            final currency = item['currency'] as String;
+
+            if (currency == 'VND') {
+              debtVnd -= totalAmount; // Negative because debt decreases
+            } else if (currency == 'CNY') {
+              debtCny -= totalAmount;
+            } else if (currency == 'USD') {
+              debtUsd -= totalAmount;
+            }
+          }
+
+          suppliersDebtChangesList.add({
+            'supplier_id': supplierId,
+            'debt_vnd': debtVnd,
+            'debt_cny': debtCny,
+            'debt_usd': debtUsd,
+          });
+        }
+      }
+
+      // Prepare account balance change (for each currency)
+      double? accountBalanceChange;
+      String? primaryCurrency;
+      if (account != null && account != 'Công nợ' && currencies.isNotEmpty) {
+        // Use first currency for RPC (will handle multiple currencies separately)
+        primaryCurrency = currencies.first;
+        final totalAmount = widget.ticketItems
+            .where((item) => item['currency'] == primaryCurrency)
+            .fold<double>(0, (sum, item) {
+              final imeiCount = (item['imei'] as String).split(',').where((e) => e.trim().isNotEmpty).length;
+              return sum + (item['price'] as num).toDouble() * imeiCount;
+            });
+        accountBalanceChange = totalAmount; // Positive because money comes back
+      }
+
+      // Debug logging
+      debugPrint('🔍 DEBUG: Calling return RPC with data:');
+      debugPrint('  ticket_id: $ticketId');
+      debugPrint('  return_orders count: ${returnOrdersList.length}');
+      debugPrint('  products_updates count: ${productsUpdatesList.length}');
+      debugPrint('  suppliers_debt_changes count: ${suppliersDebtChangesList.length}');
+      debugPrint('  account_balance_change: $accountBalanceChange');
+
+      // ✅ CALL RPC FUNCTION - All operations in ONE atomic transaction
+      final result = await retry(
+        () => supabase.rpc('create_return_transaction', params: {
+          'p_ticket_id': ticketId,
+          'p_return_orders': returnOrdersList,
+          'p_products_updates': productsUpdatesList,
+          'p_suppliers_debt_changes': suppliersDebtChangesList,
+          'p_account_balance_change': accountBalanceChange,
+          'p_account': account ?? '',
+          'p_currency': primaryCurrency ?? 'VND',
+          'p_snapshot_data': snapshotData,
+          'p_created_at': now.toIso8601String(),
+        }),
+        operation: 'Create return transaction (RPC)',
+      );
+
+      // Check result
+      if (result == null || result['success'] != true) {
+        throw Exception('RPC function returned error: ${result?['message'] ?? 'Unknown error'}');
+      }
+
+      debugPrint('✅ Return transaction created successfully via RPC!');
+
+      // Handle additional currencies if needed (for financial accounts only)
+      if (account != null && account != 'Công nợ' && currencies.length > 1) {
+        for (var currency in currencies.skip(1)) {
+          final totalAmount = widget.ticketItems
+              .where((item) => item['currency'] == currency)
+              .fold<double>(0, (sum, item) {
+                final imeiCount = (item['imei'] as String).split(',').where((e) => e.trim().isNotEmpty).length;
+                return sum + (item['price'] as num).toDouble() * imeiCount;
+              });
+
+          if (totalAmount > 0) {
+            final selectedAccount = accounts.firstWhere(
+              (acc) => acc['name'] == account && acc['currency'] == currency,
+              orElse: () => throw Exception('Không tìm thấy tài khoản cho đơn vị tiền $currency'),
+            );
+            final currentBalance = double.tryParse(selectedAccount['balance']?.toString() ?? '0') ?? 0;
+            final updatedBalance = currentBalance + totalAmount;
+
+            await supabase
+                .from('financial_accounts')
+                .update({'balance': updatedBalance})
+                .eq('name', account!)
+                .eq('currency', currency);
           }
         }
       }
@@ -616,84 +734,6 @@ class _ReturnSummaryState extends State<ReturnSummary> {
         'Đã trả hàng sản phẩm $firstProductName số lượng $totalQuantity',
         'return_created',
       );
-
-      if (account == 'Công nợ') {
-        debugPrint('Updating supplier debt');
-        // Nhóm items theo supplier_id
-        final supplierGroups = <String, List<Map<String, dynamic>>>{};
-        for (var item in widget.ticketItems) {
-          final supplierId = item['supplier_id']?.toString();
-          if (supplierId != null && supplierId.isNotEmpty) {
-            supplierGroups.putIfAbsent(supplierId, () => []).add(item);
-          }
-        }
-
-        // Cập nhật công nợ cho từng supplier
-        for (var supplierEntry in supplierGroups.entries) {
-          final supplierId = supplierEntry.key;
-          final items = supplierEntry.value;
-          
-          final currentSupplier = await supabase
-              .from('suppliers')
-              .select('debt_vnd, debt_cny, debt_usd')
-              .eq('id', supplierId)
-              .single();
-
-          // Nhóm các items của supplier này theo currency
-          final currenciesForSupplier = items.map((item) => item['currency'] as String).toSet();
-          
-          for (var currency in currenciesForSupplier) {
-            String debtColumn;
-            if (currency == 'VND') {
-              debtColumn = 'debt_vnd';
-            } else if (currency == 'CNY') {
-              debtColumn = 'debt_cny';
-            } else if (currency == 'USD') {
-              debtColumn = 'debt_usd';
-            } else {
-              throw Exception('Loại tiền tệ không được hỗ trợ: $currency');
-            }
-
-            final totalAmount = items
-                .where((item) => item['currency'] == currency)
-                .fold<double>(0, (sum, item) {
-                  final imeiCount = (item['imei'] as String).split(',').where((e) => e.trim().isNotEmpty).length;
-                  return sum + (item['price'] as num).toDouble() * imeiCount;
-                });
-
-            final currentDebt = double.tryParse(currentSupplier[debtColumn]?.toString() ?? '0') ?? 0;
-            final updatedDebt = currentDebt - totalAmount;
-
-            await supabase
-                .from('suppliers')
-                .update({debtColumn: updatedDebt})
-                .eq('id', supplierId);
-          }
-        }
-      } else {
-        debugPrint('Updating financial account balance');
-        for (var currency in currencies) {
-          final totalAmount = widget.ticketItems
-              .where((item) => item['currency'] == currency)
-              .fold<double>(0, (sum, item) {
-                final imeiCount = (item['imei'] as String).split(',').where((e) => e.trim().isNotEmpty).length;
-                return sum + (item['price'] as num).toDouble() * imeiCount;
-              });
-
-          final selectedAccount = accounts.firstWhere(
-            (acc) => acc['name'] == account && acc['currency'] == currency,
-            orElse: () => throw Exception('Không tìm thấy tài khoản cho đơn vị tiền $currency'),
-          );
-          final currentBalance = double.tryParse(selectedAccount['balance']?.toString() ?? '0') ?? 0;
-          final updatedBalance = currentBalance + totalAmount;
-
-          await supabase
-              .from('financial_accounts')
-              .update({'balance': updatedBalance})
-              .eq('name', account!)
-              .eq('currency', currency);
-        }
-      }
 
       if (mounted) {
         Navigator.pop(scaffoldContext); // Đóng dialog "Đang xử lý"
@@ -718,19 +758,14 @@ class _ReturnSummaryState extends State<ReturnSummary> {
     } catch (e) {
       if (mounted) {
         Navigator.pop(scaffoldContext); // Đóng dialog "Đang xử lý"
-        await showDialog(
+        
+        await ErrorHandler.showErrorDialog(
           context: scaffoldContext,
-          builder: (context) => AlertDialog(
-            title: const Text('Thông báo'),
-            content: Text('Lỗi tạo phiếu trả hàng: $e'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Đóng'),
-              ),
-            ],
-          ),
+          title: 'Lỗi tạo phiếu trả hàng',
+          error: e,
+          showRetry: false, // Không retry vì quá phức tạp
         );
+        
         debugPrint('Error creating ticket: $e');
       }
     }
@@ -819,6 +854,7 @@ class _ReturnSummaryState extends State<ReturnSummary> {
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
                                       Text('Sản phẩm: ${item['product_name']}'),
+                                      Text('Nhà cung cấp: ${item['supplier_name'] ?? 'N/A'}'),
                                       Text('IMEI: ${item['imei']}'),
                                       Text('Số tiền: ${formatNumberLocal(item['price'])} ${item['currency']}'),
                                       Text('Ghi chú: ${item['note'] ?? ''}'),
@@ -842,6 +878,7 @@ class _ReturnSummaryState extends State<ReturnSummary> {
                                               initialImei: item['imei'],
                                               initialNote: item['note'],
                                               initialCurrency: item['currency'],
+                                              initialSupplierId: item['supplier_id']?.toString(),
                                               ticketItems: widget.ticketItems,
                                               editIndex: index,
                                             ),
@@ -872,8 +909,6 @@ class _ReturnSummaryState extends State<ReturnSummary> {
                     'Tổng tiền: $totalAmountText',
                     style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                   ),
-                  const SizedBox(height: 8),
-                  Text('Nhà cung cấp: ${widget.supplier}'),
                   const SizedBox(height: 8),
                   wrapField(
                     DropdownButtonFormField<String>(

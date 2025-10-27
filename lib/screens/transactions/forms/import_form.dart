@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import '../../notification_service.dart';
 import '../../text_scanner_screen.dart';
+import '../../../helpers/cache_helper.dart';
 
 // Cache utility class
 class CacheUtil {
@@ -56,6 +57,13 @@ class ThousandsFormatterLocal extends TextInputFormatter {
       selection: TextSelection.collapsed(offset: formatted.length),
     );
   }
+}
+
+String generateTicketId() {
+  final now = DateTime.now();
+  final dateFormat = DateFormat('yyyyMMdd-HHmmss');
+  final randomNum = (100 + (now.millisecondsSinceEpoch % 900)).toString();
+  return 'IMP-${dateFormat.format(now)}-$randomNum';
 }
 
 String formatNumberLocal(num value) {
@@ -681,6 +689,9 @@ class _ImportFormState extends State<ImportForm> {
                   'id': response['id'] as int,
                   'name': response['name'] as String,
                 };
+                
+                // Note: Categories không cần GlobalCache vì không có autocomplete ở form khác
+                // Chỉ cache local trong form này là đủ
 
                 setState(() {
                   categories.add(newCategory);
@@ -754,7 +765,12 @@ class _ImportFormState extends State<ImportForm> {
                   operation: 'Add supplier',
                 );
                 final newSupplierId = response['id']?.toString();
+                final newSupplierName = response['name'] as String;
+                
+                // ✅ Cache supplier ngay sau khi tạo
                 if (newSupplierId != null) {
+                  CacheHelper.cacheSupplier(newSupplierId, newSupplierName);
+                  
                   setState(() {
                     suppliers.add({'id': newSupplierId, 'name': name});
                     suppliers.sort((a, b) => (a['name'] as String).compareTo(b['name'] as String));
@@ -844,7 +860,10 @@ class _ImportFormState extends State<ImportForm> {
                 );
                 final newProductId = response['id']?.toString();
                 if (newProductId != null) {
+                  // ✅ Cache product vào cả local và global cache
                   CacheUtil.cacheProductName(newProductId, name);
+                  CacheHelper.cacheProduct(newProductId, name);
+                  
                   setState(() {
                     products.add({'id': newProductId, 'name': name});
                     products.sort((a, b) => (a['name'] as String).toLowerCase().compareTo((b['name'] as String).toLowerCase()));
@@ -949,7 +968,10 @@ class _ImportFormState extends State<ImportForm> {
                 );
                 final newWarehouseId = response['id']?.toString();
                 if (newWarehouseId != null) {
+                  // ✅ Cache warehouse vào cả local và global cache
                   CacheUtil.cacheWarehouseName(newWarehouseId, name);
+                  CacheHelper.cacheWarehouse(newWarehouseId, name);
+                  
                   setState(() {
                     warehouses.add({'id': newWarehouseId, 'name': response['name'], 'type': type});
                     warehouses.sort((a, b) => (a['name'] as String).toLowerCase().compareTo((b['name'] as String).toLowerCase()));
@@ -1202,144 +1224,71 @@ class _ImportFormState extends State<ImportForm> {
                     costPrice *= exchangeRate;
                   }
 
-                  final importOrderResponse = await retry(
-                        () => supabase.from('import_orders').insert({
-                      'product_id': productId,
-                      'product_name': CacheUtil.getProductName(productId),
-                      'warehouse_id': warehouseId,
-                      'warehouse_name': CacheUtil.getWarehouseName(warehouseId),
-                      'supplier_id': supplierId,
-                      'imei': imeiList.join(','),
-                      'quantity': imeiList.length,
-                      'price': amount,
-                      'currency': currency,
-                      'account': account,
-                      'note': note,
-                      'total_amount': totalAmount,
-                      'created_at': now.toIso8601String(),
-                    }).select('id').single(),
-                    operation: 'Insert import order',
-                  );
+                  // Generate ticket ID
+                  final ticketId = generateTicketId();
 
-                  final ticketId = importOrderResponse['id']?.toString();
-                  if (ticketId == null) {
-                    throw Exception('Failed to get ticket ID');
-                  }
-
+                  // Create snapshot
                   final snapshotData = await retry(
-                        () => _createSnapshot(ticketId, imeiList),
+                    () => _createSnapshot(ticketId, imeiList),
                     operation: 'Create snapshot',
                   );
 
-                  await retry(
-                        () => supabase.from('snapshots').insert({
-                      'ticket_id': ticketId,
-                      'ticket_table': 'import_orders',
-                      'snapshot_data': snapshotData,
-                      'created_at': now.toIso8601String(),
+                  // Prepare supplier debt change
+                  Map<String, dynamic>? supplierDebtChange;
+                  if (account == 'Công nợ') {
+                    supplierDebtChange = {
+                      'debt_vnd': currency == 'VND' ? totalAmount : 0,
+                      'debt_cny': currency == 'CNY' ? totalAmount : 0,
+                      'debt_usd': currency == 'USD' ? totalAmount : 0,
+                    };
+                  }
+
+                  // Prepare account balance change
+                  double? accountBalanceChange;
+                  if (account != null && account != 'Công nợ') {
+                    accountBalanceChange = -totalAmount; // Negative because money goes out
+                  }
+
+                  // Debug logging
+                  print('🔍 DEBUG: Calling import RPC with data:');
+                  print('  ticket_id: $ticketId');
+                  print('  supplier_id: $supplierId');
+                  print('  product_id: $productId');
+                  print('  warehouse_id: $warehouseId');
+                  print('  category_id: $categoryId');
+                  print('  imei_list count: ${imeiList.length}');
+                  print('  supplier_debt_change: $supplierDebtChange');
+                  print('  account_balance_change: $accountBalanceChange');
+
+                  // ✅ CALL RPC FUNCTION - All operations in ONE atomic transaction
+                  final result = await retry(
+                    () => supabase.rpc('create_import_transaction', params: {
+                      'p_ticket_id': ticketId,
+                      'p_supplier_id': supplierId,
+                      'p_warehouse_id': warehouseId,
+                      'p_product_id': productId,
+                      'p_product_name': CacheUtil.getProductName(productId),
+                      'p_category_id': categoryId,
+                      'p_imei_list': imeiList,
+                      'p_price': amount,
+                      'p_currency': currency,
+                      'p_account': account ?? '',
+                      'p_note': note ?? '',
+                      'p_cost_price': costPrice,
+                      'p_supplier_debt_change': supplierDebtChange,
+                      'p_account_balance_change': accountBalanceChange,
+                      'p_snapshot_data': snapshotData,
+                      'p_created_at': now.toIso8601String(),
                     }),
-                    operation: 'Save snapshot',
+                    operation: 'Create import transaction (RPC)',
                   );
 
-                  for (int i = 0; i < imeiList.length; i += batchSize) {
-                    final batchImeis = imeiList.sublist(i, math.min(i + batchSize, imeiList.length));
-
-                    final existingProducts = await retry(
-                          () => supabase
-                          .from('products')
-                          .select('imei, status')
-                          .inFilter('imei', batchImeis)
-                          .eq('status', 'Đã trả ncc'),
-                      operation: 'Check returned products batch ${i ~/ batchSize + 1}',
-                    );
-
-                    final existingImeis = existingProducts.map((p) => p['imei'] as String).toSet();
-                    final newImeis = batchImeis.where((imei) => !existingImeis.contains(imei)).toList();
-
-                    if (existingImeis.isNotEmpty) {
-                      await retry(
-                            () => supabase.from('products').update({
-                          'name': CacheUtil.getProductName(productId),
-                          'category_id': categoryId,
-                          'import_price': amount,
-                          'import_currency': currency,
-                          'supplier_id': supplierId,
-                          'import_date': now.toIso8601String(),
-                          'warehouse_id': warehouseId,
-                          'warehouse_name': CacheUtil.getWarehouseName(warehouseId),
-                          'cost_price': costPrice,
-                          'status': 'Tồn kho',
-                        }).inFilter('imei', existingImeis.toList()),
-                        operation: 'Update returned products batch ${i ~/ batchSize + 1}',
-                      );
-                    }
-
-                    if (newImeis.isNotEmpty) {
-                      await retry(
-                            () => supabase.from('products').insert(newImeis.map((generatedIMEI) => {
-                          'product_id': productId,
-                          'name': CacheUtil.getProductName(productId),
-                          'category_id': categoryId,
-                          'imei': generatedIMEI,
-                          'import_price': amount,
-                          'import_currency': currency,
-                          'supplier_id': supplierId,
-                          'import_date': now.toIso8601String(),
-                          'warehouse_id': warehouseId,
-                          'warehouse_name': CacheUtil.getWarehouseName(warehouseId),
-                          'cost_price': costPrice,
-                          'status': 'Tồn kho',
-                        }).toList()),
-                        operation: 'Insert new products batch ${i ~/ batchSize + 1}',
-                      );
-                    }
+                  // Check result
+                  if (result == null || result['success'] != true) {
+                    throw Exception('RPC function returned error: ${result?['message'] ?? 'Unknown error'}');
                   }
 
-                  if (account == 'Công nợ') {
-                    final currentSupplier = await retry(
-                          () => supabase
-                          .from('suppliers')
-                          .select('debt_vnd, debt_cny, debt_usd')
-                          .eq('id', supplierId!)
-                          .single(),
-                      operation: 'Fetch supplier debt',
-                    );
-
-                    String debtColumn;
-                    if (currency == 'VND') {
-                      debtColumn = 'debt_vnd';
-                    } else if (currency == 'CNY') {
-                      debtColumn = 'debt_cny';
-                    } else if (currency == 'USD') {
-                      debtColumn = 'debt_usd';
-                    } else {
-                      throw Exception('Loại tiền tệ không được hỗ trợ: $currency');
-                    }
-
-                    final currentDebt = currentSupplier[debtColumn] as num? ?? 0;
-                    final updatedDebt = currentDebt + totalAmount;
-
-                    await retry(
-                          () => supabase
-                          .from('suppliers')
-                          .update({debtColumn: updatedDebt})
-                          .eq('id', supplierId!),
-                      operation: 'Update supplier debt',
-                    );
-                  } else {
-                    final selectedAccount = accounts.firstWhere((acc) => acc['name'] == account);
-                    final currentBalance = selectedAccount['balance'] as num? ?? 0;
-                    final updatedBalance = currentBalance - totalAmount;
-
-                    await retry(
-                          () => supabase
-                          .from('financial_accounts')
-                          .update({'balance': updatedBalance})
-                          .eq('name', account!)
-                          .eq('currency', currency!),
-                      operation: 'Update account balance',
-                    );
-                  }
+                  print('✅ Import transaction created successfully via RPC!');
 
                   final currentProductId = productId;
                   final currentImeiListLength = imeiList.length;
@@ -1352,35 +1301,76 @@ class _ImportFormState extends State<ImportForm> {
                   );
 
                   if (mounted) {
+                    // Reset all fields
                     setState(() {
+                      categoryId = null;
+                      categoryName = null;
+                      supplier = null;
+                      supplierId = null;
+                      productId = null;
+                      productName = null;
+                      imei = '';
+                      price = null;
+                      currency = null;
+                      account = null;
+                      note = null;
+                      warehouseId = null;
+                      warehouseName = null;
+                      isAccessory = false;
+                      imeiError = null;
                       isProcessing = false;
+                      accountNames = [];
                     });
+                    
+                    // Clear controllers
+                    imeiController.clear();
+                    priceController.clear();
+                    confirmedImeis.clear();
+                    
+                    // Show success message
                     ScaffoldMessenger.of(scaffoldContext).showSnackBar(
                       SnackBar(
                         content: Text(
                           'Đã nhập hàng "${CacheUtil.getProductName(currentProductId)}" số lượng ${formatNumberLocal(currentImeiListLength)} chiếc',
                           style: const TextStyle(color: Colors.white),
                         ),
-                        backgroundColor: Colors.black,
+                        backgroundColor: Colors.green,
                         behavior: SnackBarBehavior.floating,
                         margin: const EdgeInsets.all(8),
-                        duration: const Duration(seconds: 3),
+                        duration: const Duration(seconds: 2),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                       ),
                     );
-                    Navigator.pop(context);
-                    Navigator.pop(context);
                   }
                 } catch (e) {
+                  print('❌ ERROR: $e');
+                  print('❌ ERROR TYPE: ${e.runtimeType}');
+                  
                   setState(() {
                     isProcessing = false;
                   });
+                  
                   if (mounted) {
+                    // Show detailed error for debugging
+                    String errorMessage = e.toString();
+                    if (e is PostgrestException) {
+                      errorMessage = 'PostgrestException:\n'
+                          'Message: ${e.message}\n'
+                          'Code: ${e.code}\n'
+                          'Details: ${e.details}\n'
+                          'Hint: ${e.hint}';
+                    }
+                    
                     await showDialog(
                       context: scaffoldContext,
                       builder: (context) => AlertDialog(
-                        title: const Text('Thông báo'),
-                        content: Text('Lỗi khi tạo phiếu: $e'),
+                        title: const Text('Lỗi tạo phiếu nhập hàng'),
+                        content: SingleChildScrollView(
+                          child: SelectableText(
+                            errorMessage,
+                            style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+                          ),
+                        ),
                         actions: [
                           TextButton(
                             onPressed: () => Navigator.pop(context),
@@ -1636,6 +1626,41 @@ class _ImportFormState extends State<ImportForm> {
               wrapField(
                 Column(
                   children: [
+                    // ✅ FIX: Hiển thị số lượng IMEI đã nhập
+                    if (imei != null && imei!.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8.0),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              'Đã nhập ${imei!.split('\n').where((e) => e.trim().isNotEmpty).length} IMEI',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                                color: Colors.blue,
+                              ),
+                            ),
+                            TextButton.icon(
+                              onPressed: () {
+                                setState(() {
+                                  imei = '';
+                                  imeiController.clear();
+                                  imeiError = null;
+                                });
+                              },
+                              icon: const Icon(Icons.clear_all, size: 16),
+                              label: const Text('Xóa tất cả', style: TextStyle(fontSize: 12)),
+                              style: TextButton.styleFrom(
+                                foregroundColor: Colors.red,
+                                padding: EdgeInsets.zero,
+                                minimumSize: const Size(0, 0),
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     // Phần nhập IMEI
                     Expanded(
                       child: TextFormField(
@@ -1656,10 +1681,11 @@ class _ImportFormState extends State<ImportForm> {
                           }
                         },
                         decoration: InputDecoration(
-                          labelText: 'Nhập imei hoặc quét QR (mỗi dòng 1)',
+                          labelText: 'Nhập IMEI hoặc quét QR (mỗi dòng 1)',
                           border: InputBorder.none,
                           isDense: true,
                           errorText: imeiError,
+                          floatingLabelBehavior: FloatingLabelBehavior.never, // ✅ Label biến mất khi focus
                         ),
                       ),
                     ),

@@ -6,6 +6,8 @@ import 'package:open_file/open_file.dart';
 import 'dart:io';
 import 'dart:developer' as developer;
 import 'package:intl/intl.dart';
+import '../helpers/export_progress_dialog.dart';
+import '../helpers/error_handler.dart';
 
 // Cache utility class
 class CacheUtil {
@@ -490,20 +492,23 @@ class _SupplierDetailsDialogState extends State<SupplierDetailsDialog> {
         });
         return;
       }
+
+      final start = currentPage * pageSize;
+      final end = start + pageSize - 1;
       
-      final importOrdersQuery = widget.tenantClient
+      dynamic importOrdersQuery = widget.tenantClient
           .from('import_orders')
           .select('id, product_id, imei, quantity, price, currency, created_at, account, note, warehouse_id')
           .eq('supplier_id', supplierId)
           .eq('iscancelled', false);
 
-      final returnOrdersQuery = widget.tenantClient
+      dynamic returnOrdersQuery = widget.tenantClient
           .from('return_orders')
           .select('id, product_id, imei, quantity, price, currency, created_at, account, note, warehouse_id')
           .eq('supplier_id', supplierId)
           .eq('iscancelled', false);
 
-      final financialOrdersQuery = widget.tenantClient
+      dynamic financialOrdersQuery = widget.tenantClient
           .from('financial_orders')
           .select('id, amount, currency, created_at, account, note')
           .eq('partner_type', 'suppliers')
@@ -512,19 +517,24 @@ class _SupplierDetailsDialogState extends State<SupplierDetailsDialog> {
 
       // Add date filters if dates are selected
       if (startDate != null) {
-        importOrdersQuery.gte('created_at', startDate!.toIso8601String());
-        returnOrdersQuery.gte('created_at', startDate!.toIso8601String());
-        financialOrdersQuery.gte('created_at', startDate!.toIso8601String());
+        importOrdersQuery = importOrdersQuery.gte('created_at', startDate!.toIso8601String());
+        returnOrdersQuery = returnOrdersQuery.gte('created_at', startDate!.toIso8601String());
+        financialOrdersQuery = financialOrdersQuery.gte('created_at', startDate!.toIso8601String());
       }
       if (endDate != null) {
         final endDateTime = endDate!.add(const Duration(days: 1));
-        importOrdersQuery.lt('created_at', endDateTime.toIso8601String());
-        returnOrdersQuery.lt('created_at', endDateTime.toIso8601String());
-        financialOrdersQuery.lt('created_at', endDateTime.toIso8601String());
+        importOrdersQuery = importOrdersQuery.lt('created_at', endDateTime.toIso8601String());
+        returnOrdersQuery = returnOrdersQuery.lt('created_at', endDateTime.toIso8601String());
+        financialOrdersQuery = financialOrdersQuery.lt('created_at', endDateTime.toIso8601String());
       }
 
+      // Add order and range after all filters
+      importOrdersQuery = importOrdersQuery.order('created_at', ascending: false).range(start, end);
+      returnOrdersQuery = returnOrdersQuery.order('created_at', ascending: false).range(start, end);
+      financialOrdersQuery = financialOrdersQuery.order('created_at', ascending: false).range(start, end);
+
       developer.log('Executing queries for supplier: "$supplierName"');
-      final results = await Future.wait([
+      final results = await Future.wait<dynamic>([
         importOrdersQuery,
         returnOrdersQuery,
         financialOrdersQuery,
@@ -560,6 +570,7 @@ class _SupplierDetailsDialogState extends State<SupplierDetailsDialog> {
 
       setState(() {
         transactions.addAll(newTransactions);
+        // ✅ Logic hasMoreData: nếu fetch được ít hơn pageSize thì không còn dữ liệu
         if (newTransactions.length < pageSize) {
           hasMoreData = false;
         }
@@ -576,18 +587,8 @@ class _SupplierDetailsDialogState extends State<SupplierDetailsDialog> {
   }
 
   List<Map<String, dynamic>> get filteredTransactions {
-    var filtered = transactions;
-
-    if (startDate != null && endDate != null) {
-      filtered = filtered.where((transaction) {
-        final transactionDate = DateTime.tryParse(transaction['created_at']?.toString() ?? '1900-01-01');
-        if (transactionDate == null) return false;
-        return transactionDate.isAfter(startDate!.subtract(const Duration(days: 1))) &&
-            transactionDate.isBefore(endDate!.add(const Duration(days: 1)));
-      }).toList();
-    }
-
-    return filtered;
+    // Không cần lọc lại ở đây vì đã lọc trong query database
+    return transactions;
   }
 
   Future<void> _selectDate(BuildContext context, bool isStart) async {
@@ -604,8 +605,9 @@ class _SupplierDetailsDialogState extends State<SupplierDetailsDialog> {
         } else {
           endDate = picked;
         }
-        hasMoreData = false;
       });
+      // ✅ Gọi lại fetch để áp dụng filter vào query
+      await _fetchTransactions();
     }
   }
 
@@ -616,6 +618,10 @@ class _SupplierDetailsDialogState extends State<SupplierDetailsDialog> {
       );
       return;
     }
+
+    // Hiển thị progress dialog
+    if (!mounted) return;
+    ExportProgressDialog.show(context);
 
     try {
       List<Map<String, dynamic>> exportTransactions = filteredTransactions;
@@ -632,20 +638,23 @@ class _SupplierDetailsDialogState extends State<SupplierDetailsDialog> {
             .from('import_orders')
             .select('id, product_id, imei, quantity, price, currency, created_at, account, note, warehouse_id')
             .eq('supplier_id', supplierId)
-            .eq('iscancelled', false);
+            .eq('iscancelled', false)
+            .order('created_at', ascending: false);
 
         final returnOrdersFuture = widget.tenantClient
             .from('return_orders')
             .select('id, product_id, imei, quantity, price, currency, created_at, account, note, warehouse_id')
             .eq('supplier_id', supplierId)
-            .eq('iscancelled', false);
+            .eq('iscancelled', false)
+            .order('created_at', ascending: false);
 
         final financialOrdersFuture = widget.tenantClient
             .from('financial_orders')
             .select('id, amount, currency, created_at, account, note')
             .eq('partner_type', 'suppliers')
             .eq('partner_id', supplierId)
-            .eq('iscancelled', false);
+            .eq('iscancelled', false)
+            .order('created_at', ascending: false);
 
         final results = await Future.wait([
           importOrdersFuture,
@@ -803,12 +812,17 @@ class _SupplierDetailsDialogState extends State<SupplierDetailsDialog> {
       }
       await file.writeAsBytes(excelBytes);
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Đã xuất file Excel: $filePath')),
-      );
+      // Đóng progress dialog
+      if (mounted) ExportProgressDialog.hide(context);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Đã xuất file Excel: $filePath')),
+        );
+      }
 
       final openResult = await OpenFile.open(filePath);
-      if (openResult.type != ResultType.done) {
+      if (openResult.type != ResultType.done && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Không thể mở file. File đã được lưu tại: $filePath'),
@@ -816,9 +830,21 @@ class _SupplierDetailsDialogState extends State<SupplierDetailsDialog> {
         );
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Lỗi khi xuất file Excel: $e')),
-      );
+      // Đóng progress dialog nếu có lỗi
+      if (mounted) ExportProgressDialog.hide(context);
+      
+      if (mounted) {
+        final shouldRetry = await ErrorHandler.showErrorDialog(
+          context: context,
+          title: 'Lỗi xuất Excel',
+          error: e,
+          showRetry: true,
+        );
+        
+        if (shouldRetry) {
+          await _exportToExcel();
+        }
+      }
     }
   }
 
