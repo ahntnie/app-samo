@@ -692,6 +692,9 @@ class _ImportFormState extends State<ImportForm> {
                 
                 // Note: Categories không cần GlobalCache vì không có autocomplete ở form khác
                 // Chỉ cache local trong form này là đủ
+                
+                // Note: Categories không cần GlobalCache vì không có autocomplete ở form khác
+                // Chỉ cache local trong form này là đủ
 
                 setState(() {
                   categories.add(newCategory);
@@ -768,7 +771,12 @@ class _ImportFormState extends State<ImportForm> {
                 final newSupplierName = response['name'] as String;
                 
                 // ✅ Cache supplier ngay sau khi tạo
+                final newSupplierName = response['name'] as String;
+                
+                // ✅ Cache supplier ngay sau khi tạo
                 if (newSupplierId != null) {
+                  CacheHelper.cacheSupplier(newSupplierId, newSupplierName);
+                  
                   CacheHelper.cacheSupplier(newSupplierId, newSupplierName);
                   
                   setState(() {
@@ -861,7 +869,10 @@ class _ImportFormState extends State<ImportForm> {
                 final newProductId = response['id']?.toString();
                 if (newProductId != null) {
                   // ✅ Cache product vào cả local và global cache
+                  // ✅ Cache product vào cả local và global cache
                   CacheUtil.cacheProductName(newProductId, name);
+                  CacheHelper.cacheProduct(newProductId, name);
+                  
                   CacheHelper.cacheProduct(newProductId, name);
                   
                   setState(() {
@@ -969,7 +980,10 @@ class _ImportFormState extends State<ImportForm> {
                 final newWarehouseId = response['id']?.toString();
                 if (newWarehouseId != null) {
                   // ✅ Cache warehouse vào cả local và global cache
+                  // ✅ Cache warehouse vào cả local và global cache
                   CacheUtil.cacheWarehouseName(newWarehouseId, name);
+                  CacheHelper.cacheWarehouse(newWarehouseId, name);
+                  
                   CacheHelper.cacheWarehouse(newWarehouseId, name);
                   
                   setState(() {
@@ -1302,7 +1316,23 @@ class _ImportFormState extends State<ImportForm> {
 
                   if (mounted) {
                     // Reset all fields
+                    // Reset all fields
                     setState(() {
+                      categoryId = null;
+                      categoryName = null;
+                      supplier = null;
+                      supplierId = null;
+                      productId = null;
+                      productName = null;
+                      imei = '';
+                      price = null;
+                      currency = null;
+                      account = null;
+                      note = null;
+                      warehouseId = null;
+                      warehouseName = null;
+                      isAccessory = false;
+                      imeiError = null;
                       categoryId = null;
                       categoryName = null;
                       supplier = null;
@@ -1328,6 +1358,15 @@ class _ImportFormState extends State<ImportForm> {
                     confirmedImeis.clear();
                     
                     // Show success message
+                      accountNames = [];
+                    });
+                    
+                    // Clear controllers
+                    imeiController.clear();
+                    priceController.clear();
+                    confirmedImeis.clear();
+                    
+                    // Show success message
                     ScaffoldMessenger.of(scaffoldContext).showSnackBar(
                       SnackBar(
                         content: Text(
@@ -1335,8 +1374,10 @@ class _ImportFormState extends State<ImportForm> {
                           style: const TextStyle(color: Colors.white),
                         ),
                         backgroundColor: Colors.green,
+                        backgroundColor: Colors.green,
                         behavior: SnackBarBehavior.floating,
                         margin: const EdgeInsets.all(8),
+                        duration: const Duration(seconds: 2),
                         duration: const Duration(seconds: 2),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                       ),
@@ -1661,6 +1702,41 @@ class _ImportFormState extends State<ImportForm> {
                           ],
                         ),
                       ),
+                    // ✅ FIX: Hiển thị số lượng IMEI đã nhập
+                    if (imei != null && imei!.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8.0),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              'Đã nhập ${imei!.split('\n').where((e) => e.trim().isNotEmpty).length} IMEI',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                                color: Colors.blue,
+                              ),
+                            ),
+                            TextButton.icon(
+                              onPressed: () {
+                                setState(() {
+                                  imei = '';
+                                  imeiController.clear();
+                                  imeiError = null;
+                                });
+                              },
+                              icon: const Icon(Icons.clear_all, size: 16),
+                              label: const Text('Xóa tất cả', style: TextStyle(fontSize: 12)),
+                              style: TextButton.styleFrom(
+                                foregroundColor: Colors.red,
+                                padding: EdgeInsets.zero,
+                                minimumSize: const Size(0, 0),
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     // Phần nhập IMEI
                     Expanded(
                       child: TextFormField(
@@ -1682,9 +1758,11 @@ class _ImportFormState extends State<ImportForm> {
                         },
                         decoration: InputDecoration(
                           labelText: 'Nhập IMEI hoặc quét QR (mỗi dòng 1)',
+                          labelText: 'Nhập IMEI hoặc quét QR (mỗi dòng 1)',
                           border: InputBorder.none,
                           isDense: true,
                           errorText: imeiError,
+                          floatingLabelBehavior: FloatingLabelBehavior.never, // ✅ Label biến mất khi focus
                           floatingLabelBehavior: FloatingLabelBehavior.never, // ✅ Label biến mất khi focus
                         ),
                       ),

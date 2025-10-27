@@ -7,6 +7,7 @@ import '../../notification_service.dart';
 import 'dart:async';
 import 'dart:math' as math;
 import '../../text_scanner_screen.dart';
+import '../../../helpers/error_handler.dart';
 
 // Cache utility class
 class CacheUtil {

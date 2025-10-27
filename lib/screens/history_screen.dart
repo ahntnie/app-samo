@@ -7,6 +7,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:open_file/open_file.dart';
 import 'dart:io';
 import 'dart:developer' as developer;
+import '../helpers/error_handler.dart';
 
 class HistoryScreen extends StatefulWidget {
   final List<String> permissions;

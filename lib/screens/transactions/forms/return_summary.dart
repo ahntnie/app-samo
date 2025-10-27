@@ -274,6 +274,8 @@ class _ReturnSummaryState extends State<ReturnSummary> {
 
   /// ✅ NEW: Validate return prices against import prices
   Future<Map<String, dynamic>> _validateReturnPrices() async {
+  /// ✅ NEW: Validate return prices against import prices
+  Future<Map<String, dynamic>> _validateReturnPrices() async {
     final supabase = widget.tenantClient;
     final warnings = <String>[];
     int totalOverpriced = 0;
@@ -291,7 +293,55 @@ class _ReturnSummaryState extends State<ReturnSummary> {
       final imeiResponse = await supabase
           .from('products')
           .select('imei, import_price, import_currency')
+    final warnings = <String>[];
+    int totalOverpriced = 0;
+    num totalLoss = 0;
+
+    for (final item in widget.ticketItems) {
+      final imeiList = (item['imei'] as String).split(',').where((e) => e.trim().isNotEmpty).toList();
+      final returnPrice = (item['price'] as num?) ?? 0;
+      final returnCurrency = item['currency'] as String? ?? 'VND';
+      final productName = item['product_name'] as String? ?? 'Sản phẩm';
+
+      if (imeiList.isEmpty) continue;
+
+      // Get import prices for all IMEIs
+      final imeiResponse = await supabase
+          .from('products')
+          .select('imei, import_price, import_currency')
           .inFilter('imei', imeiList);
+
+      for (var product in imeiResponse) {
+        final imei = product['imei'] as String;
+        final importPrice = (product['import_price'] as num?) ?? 0;
+        final importCurrency = product['import_currency'] as String? ?? 'VND';
+
+        // Only compare if same currency
+        if (returnCurrency == importCurrency && returnPrice > importPrice) {
+          totalOverpriced++;
+          final loss = returnPrice - importPrice;
+          totalLoss += loss;
+          warnings.add(
+            '• $productName (${imei.substring(0, imei.length > 8 ? 8 : imei.length)}...): '
+            'Giá trả ${_formatCurrency(returnPrice, returnCurrency)} '
+            '> Giá nhập ${_formatCurrency(importPrice, importCurrency)} '
+            '(Lỗ: ${_formatCurrency(loss, returnCurrency)})'
+          );
+        }
+      }
+    }
+
+    return {
+      'hasWarning': warnings.isNotEmpty,
+      'warnings': warnings,
+      'totalOverpriced': totalOverpriced,
+      'totalLoss': totalLoss,
+    };
+  }
+
+  String _formatCurrency(num amount, String currency) {
+    final formatted = numberFormat.format(amount).replaceAll(',', '.');
+    return '$formatted $currency';
 
       for (var product in imeiResponse) {
         final imei = product['imei'] as String;
@@ -449,6 +499,104 @@ class _ReturnSummaryState extends State<ReturnSummary> {
         debugPrint('Error validating foreign keys: $e');
       }
       return;
+    }
+
+    // ✅ NEW: Kiểm tra giá trả so với giá nhập
+    try {
+      final priceValidation = await _validateReturnPrices();
+      if (priceValidation['hasWarning'] == true) {
+        if (mounted) {
+          Navigator.pop(scaffoldContext); // Đóng dialog "Đang xử lý"
+          
+          // Hiển thị cảnh báo với option tiếp tục hoặc hủy
+          final shouldContinue = await showDialog<bool>(
+            context: scaffoldContext,
+            builder: (context) => AlertDialog(
+              title: const Row(
+                children: [
+                  Icon(Icons.warning_amber_rounded, color: Colors.orange, size: 28),
+                  SizedBox(width: 8),
+                  Text('Cảnh báo: Giá Trả Cao'),
+                ],
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Phát hiện ${priceValidation['totalOverpriced']} sản phẩm có giá trả cao hơn giá nhập, '
+                      'gây lỗ tổng cộng: ${_formatCurrency(priceValidation['totalLoss'], widget.currency)}',
+                      style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.red),
+                    ),
+                    const SizedBox(height: 12),
+                    const Text('Chi tiết:', style: TextStyle(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    ...(priceValidation['warnings'] as List<String>).map((warning) => 
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Text(warning, style: const TextStyle(fontSize: 13)),
+                      )
+                    ),
+                    const SizedBox(height: 12),
+                    const Text(
+                      'Điều này có thể do:\n'
+                      '• Nhập sai giá trả\n'
+                      '• NCC đồng ý đổi giá\n'
+                      '• Trả hàng có chi phí phát sinh',
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Bạn có chắc chắn muốn tiếp tục?',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('Hủy - Kiểm tra lại', style: TextStyle(color: Colors.grey)),
+                ),
+                ElevatedButton(
+                  onPressed: () => Navigator.pop(context, true),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.orange,
+                  ),
+                  child: const Text('Xác nhận - Tiếp tục'),
+                ),
+              ],
+            ),
+          );
+
+          if (shouldContinue != true) {
+            // User chose to cancel
+            return;
+          }
+          
+          // User confirmed, show processing dialog again
+          if (mounted) {
+            showDialog(
+              context: scaffoldContext,
+              barrierDismissible: false,
+              builder: (context) => const AlertDialog(
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircularProgressIndicator(),
+                    SizedBox(height: 16),
+                    Text('Vui lòng chờ xử lý dữ liệu.'),
+                  ],
+                ),
+              ),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Error validating return prices: $e');
+      // Non-blocking error, continue with ticket creation
     }
 
     // ✅ NEW: Kiểm tra giá trả so với giá nhập
@@ -760,7 +908,14 @@ class _ReturnSummaryState extends State<ReturnSummary> {
         Navigator.pop(scaffoldContext); // Đóng dialog "Đang xử lý"
         
         await ErrorHandler.showErrorDialog(
+        
+        await ErrorHandler.showErrorDialog(
           context: scaffoldContext,
+          title: 'Lỗi tạo phiếu trả hàng',
+          error: e,
+          showRetry: false, // Không retry vì quá phức tạp
+        );
+        
           title: 'Lỗi tạo phiếu trả hàng',
           error: e,
           showRetry: false, // Không retry vì quá phức tạp
