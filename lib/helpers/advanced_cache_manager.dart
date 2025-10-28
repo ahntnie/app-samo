@@ -3,15 +3,14 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'dart:async';
 
 /// Advanced Cache Manager với persistent storage và background sync
-///
+/// 
 /// CHIẾN LƯỢC:
 /// 1. Persistent Cache (Hive) - Data vẫn còn khi tắt app
 /// 2. Background Sync - Fetch data mới trong background
 /// 3. Smart Invalidation - Tự động refresh khi có thay đổi
 /// 4. Multi-layer Cache - Memory (fast) + Disk (persistent)
 class AdvancedCacheManager {
-  static final AdvancedCacheManager _instance =
-      AdvancedCacheManager._internal();
+  static final AdvancedCacheManager _instance = AdvancedCacheManager._internal();
   factory AdvancedCacheManager() => _instance;
   AdvancedCacheManager._internal();
 
@@ -124,16 +123,10 @@ class AdvancedCacheManager {
       }
 
       print('✅ Loaded ${_memoryProductCache.length} products from disk cache');
-      print(
-        '✅ Loaded ${_memoryWarehouseCache.length} warehouses from disk cache',
-      );
-      print(
-        '✅ Loaded ${_memorySupplierCache.length} suppliers from disk cache',
-      );
+      print('✅ Loaded ${_memoryWarehouseCache.length} warehouses from disk cache');
+      print('✅ Loaded ${_memorySupplierCache.length} suppliers from disk cache');
       print('✅ Loaded ${_memoryFixerCache.length} fixers from disk cache');
-      print(
-        '✅ Loaded ${_memoryCustomerCache.length} customers from disk cache',
-      );
+      print('✅ Loaded ${_memoryCustomerCache.length} customers from disk cache');
     } catch (e) {
       print('❌ Error loading disk cache: $e');
     }
@@ -142,13 +135,13 @@ class AdvancedCacheManager {
   /// Kiểm tra cache có hết hạn chưa
   bool _isCacheExpired(String key) {
     if (_metadataBox == null) return true;
-
+    
     final metadata = _metadataBox!.get(key);
     if (metadata == null) return true;
-
+    
     final lastFetched = metadata['lastFetched'] as int?;
     if (lastFetched == null) return true;
-
+    
     final lastFetchedTime = DateTime.fromMillisecondsSinceEpoch(lastFetched);
     return DateTime.now().difference(lastFetchedTime) > _cacheExpiration;
   }
@@ -156,7 +149,7 @@ class AdvancedCacheManager {
   /// Cập nhật metadata timestamp
   Future<void> _updateMetadata(String key) async {
     if (_metadataBox == null) return;
-
+    
     await _metadataBox!.put(key, {
       'lastFetched': DateTime.now().millisecondsSinceEpoch,
     });
@@ -166,27 +159,20 @@ class AdvancedCacheManager {
   // PRODUCTS
   // ============================================================================
 
-  Future<void> fetchAndCacheProducts(
-    SupabaseClient client, {
-    bool force = false,
-  }) async {
+  Future<void> fetchAndCacheProducts(SupabaseClient client, {bool force = false}) async {
     if (!_isInitialized) await initialize();
-
+    
     // Nếu có cache trong memory và chưa hết hạn, skip
-    if (!force &&
-        _memoryProductCache.isNotEmpty &&
-        !_isCacheExpired('products')) {
+    if (!force && _memoryProductCache.isNotEmpty && !_isCacheExpired('products')) {
       return;
     }
 
     try {
-      final response = await client
-          .from('products_name')
-          .select('id, products');
-
+      final response = await client.from('products_name').select('id, products');
+      
       _memoryProductCache.clear();
       final diskData = <String, String>{};
-
+      
       for (var product in response) {
         final id = product['id'].toString();
         final name = product['products'] as String;
@@ -220,31 +206,25 @@ class AdvancedCacheManager {
     });
   }
 
-  Map<String, String> get productNameCache =>
-      Map.unmodifiable(_memoryProductCache);
+  Map<String, String> get productNameCache => Map.unmodifiable(_memoryProductCache);
 
   // ============================================================================
   // WAREHOUSES
   // ============================================================================
 
-  Future<void> fetchAndCacheWarehouses(
-    SupabaseClient client, {
-    bool force = false,
-  }) async {
+  Future<void> fetchAndCacheWarehouses(SupabaseClient client, {bool force = false}) async {
     if (!_isInitialized) await initialize();
-
-    if (!force &&
-        _memoryWarehouseCache.isNotEmpty &&
-        !_isCacheExpired('warehouses')) {
+    
+    if (!force && _memoryWarehouseCache.isNotEmpty && !_isCacheExpired('warehouses')) {
       return;
     }
 
     try {
       final response = await client.from('warehouses').select('id, name');
-
+      
       _memoryWarehouseCache.clear();
       final diskData = <String, String>{};
-
+      
       for (var warehouse in response) {
         final id = warehouse['id'].toString();
         final name = warehouse['name'] as String;
@@ -276,31 +256,25 @@ class AdvancedCacheManager {
     });
   }
 
-  Map<String, String> get warehouseNameCache =>
-      Map.unmodifiable(_memoryWarehouseCache);
+  Map<String, String> get warehouseNameCache => Map.unmodifiable(_memoryWarehouseCache);
 
   // ============================================================================
   // SUPPLIERS
   // ============================================================================
 
-  Future<void> fetchAndCacheSuppliers(
-    SupabaseClient client, {
-    bool force = false,
-  }) async {
+  Future<void> fetchAndCacheSuppliers(SupabaseClient client, {bool force = false}) async {
     if (!_isInitialized) await initialize();
-
-    if (!force &&
-        _memorySupplierCache.isNotEmpty &&
-        !_isCacheExpired('suppliers')) {
+    
+    if (!force && _memorySupplierCache.isNotEmpty && !_isCacheExpired('suppliers')) {
       return;
     }
 
     try {
       final response = await client.from('suppliers').select('id, name');
-
+      
       _memorySupplierCache.clear();
       final diskData = <String, String>{};
-
+      
       for (var supplier in response) {
         final id = supplier['id'].toString();
         final name = supplier['name'] as String;
@@ -332,29 +306,25 @@ class AdvancedCacheManager {
     });
   }
 
-  Map<String, String> get supplierNameCache =>
-      Map.unmodifiable(_memorySupplierCache);
+  Map<String, String> get supplierNameCache => Map.unmodifiable(_memorySupplierCache);
 
   // ============================================================================
   // FIXERS
   // ============================================================================
 
-  Future<void> fetchAndCacheFixers(
-    SupabaseClient client, {
-    bool force = false,
-  }) async {
+  Future<void> fetchAndCacheFixers(SupabaseClient client, {bool force = false}) async {
     if (!_isInitialized) await initialize();
-
+    
     if (!force && _memoryFixerCache.isNotEmpty && !_isCacheExpired('fixers')) {
       return;
     }
 
     try {
       final response = await client.from('fix_units').select('id, name');
-
+      
       _memoryFixerCache.clear();
       final diskData = <String, String>{};
-
+      
       for (var fixer in response) {
         final id = fixer['id'].toString();
         final name = fixer['name'] as String;
@@ -392,24 +362,19 @@ class AdvancedCacheManager {
   // CUSTOMERS
   // ============================================================================
 
-  Future<void> fetchAndCacheCustomers(
-    SupabaseClient client, {
-    bool force = false,
-  }) async {
+  Future<void> fetchAndCacheCustomers(SupabaseClient client, {bool force = false}) async {
     if (!_isInitialized) await initialize();
-
-    if (!force &&
-        _memoryCustomerCache.isNotEmpty &&
-        !_isCacheExpired('customers')) {
+    
+    if (!force && _memoryCustomerCache.isNotEmpty && !_isCacheExpired('customers')) {
       return;
     }
 
     try {
       final response = await client.from('customers').select('id, name');
-
+      
       _memoryCustomerCache.clear();
       final diskData = <String, String>{};
-
+      
       for (var customer in response) {
         final id = customer['id'].toString();
         final name = customer['name'] as String;
@@ -441,18 +406,14 @@ class AdvancedCacheManager {
     });
   }
 
-  Map<String, String> get customerNameCache =>
-      Map.unmodifiable(_memoryCustomerCache);
+  Map<String, String> get customerNameCache => Map.unmodifiable(_memoryCustomerCache);
 
   // ============================================================================
   // BATCH OPERATIONS
   // ============================================================================
 
   /// Fetch tất cả caches một lúc
-  Future<void> fetchAllCaches(
-    SupabaseClient client, {
-    bool force = false,
-  }) async {
+  Future<void> fetchAllCaches(SupabaseClient client, {bool force = false}) async {
     await Future.wait([
       fetchAndCacheProducts(client, force: force),
       fetchAndCacheWarehouses(client, force: force),
@@ -465,15 +426,13 @@ class AdvancedCacheManager {
   /// Start background sync
   void startBackgroundSync(SupabaseClient client) {
     _backgroundSyncTimer?.cancel();
-
+    
     _backgroundSyncTimer = Timer.periodic(_backgroundSyncInterval, (timer) {
       print('🔄 Background sync triggered');
       fetchAllCaches(client, force: false); // Chỉ refresh nếu hết hạn
     });
-
-    print(
-      '✅ Background sync started (every ${_backgroundSyncInterval.inMinutes} minutes)',
-    );
+    
+    print('✅ Background sync started (every ${_backgroundSyncInterval.inMinutes} minutes)');
   }
 
   /// Stop background sync
@@ -569,3 +528,4 @@ class AdvancedCacheManager {
     print('🔒 AdvancedCacheManager disposed');
   }
 }
+

@@ -104,8 +104,16 @@ class _FixSendSummaryState extends State<FixSendSummary> {
 
   Future<void> createTicket(BuildContext scaffoldContext) async {
     if (isProcessing) return;
+    
+    // Set isProcessing ngay để ngăn double-submit
+    setState(() {
+      isProcessing = true;
+    });
 
     if (widget.ticketItems.isEmpty) {
+      setState(() {
+        isProcessing = false;
+      });
       if (mounted) {
         showDialog(
           context: scaffoldContext,
@@ -125,6 +133,9 @@ class _FixSendSummaryState extends State<FixSendSummary> {
     }
 
     if (widget.ticketItems.length > maxTicketItems) {
+      setState(() {
+        isProcessing = false;
+      });
       if (mounted) {
         showDialog(
           context: scaffoldContext,
@@ -150,6 +161,9 @@ class _FixSendSummaryState extends State<FixSendSummary> {
     }
 
     if (allImeis.length > maxImeiLimit) {
+      setState(() {
+        isProcessing = false;
+      });
       if (mounted) {
         showDialog(
           context: scaffoldContext,
@@ -167,10 +181,6 @@ class _FixSendSummaryState extends State<FixSendSummary> {
       }
       return;
     }
-
-    setState(() {
-      isProcessing = true;
-    });
 
     try {
       final supabase = widget.tenantClient;

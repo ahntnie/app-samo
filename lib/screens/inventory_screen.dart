@@ -11,6 +11,7 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:printing/printing.dart';
 import 'package:barcode/barcode.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:intl/intl.dart';
 import '../helpers/global_cache_manager.dart';
 
 // Backward compatibility alias
@@ -362,101 +363,15 @@ class _InventoryScreenState extends State<InventoryScreen> {
     return currentDate.difference(importDateParsed).inDays.abs();
   }
 
-  Future<String?> _fetchCustomerFromSaleOrders(String productId, String imei) async {
-    try {
-      final productName = CacheUtil.getProductName(productId);
-      final response = await widget.tenantClient
-          .from('sale_orders')
-          .select('customer, imei, product')
-          .ilike('product', '%$productName%')
-          .ilike('imei', '%$imei%')
-          .maybeSingle();
-
-      return response?['customer']?.toString();
-    } catch (e) {
-      return null;
-    }
-  }
-
-  Future<String?> _fetchSupplierFromImportOrders(String productId, String imei) async {
-    try {
-      final productName = CacheUtil.getProductName(productId);
-      final response = await widget.tenantClient
-          .from('import_orders')
-          .select('supplier, imei, product')
-          .ilike('product', '%$productName%')
-          .ilike('imei', '%$imei%')
-          .maybeSingle();
-
-      return response?['supplier']?.toString();
-    } catch (e) {
-      return null;
-    }
-  }
-
-  Future<Map<String, String?>> _fetchCustomersForItems(List<Map<String, dynamic>> items) async {
-    if (!widget.permissions.contains('view_customer')) return {};
-
-    Map<String, String?> customerMap = {};
-    const batchSize = 50;
-    final batches = <List<Map<String, dynamic>>>[];
-    for (var i = 0; i < items.length; i += batchSize) {
-      batches.add(items.sublist(i, i + batchSize > items.length ? items.length : i + batchSize));
-    }
-
-    for (var batch in batches) {
-      try {
-        for (var item in batch) {
-          final productId = item['product_id']?.toString() ?? '';
-          final imei = item['imei']?.toString() ?? '';
-          final cacheKey = '$productId|$imei';
-          final customer = item['customer']?.toString() ?? await _fetchCustomerFromSaleOrders(productId, imei);
-          customerMap[cacheKey] = customer;
-        }
-      } catch (e) {}
-    }
-
-    for (var item in items) {
-      final productId = item['product_id']?.toString() ?? '';
-      final imei = item['imei']?.toString() ?? '';
-      final cacheKey = '$productId|$imei';
-      customerMap.putIfAbsent(cacheKey, () => null);
-    }
-
-    return customerMap;
-  }
-
-  Future<Map<String, String?>> _fetchSuppliersForItems(List<Map<String, dynamic>> items) async {
-    if (!widget.permissions.contains('view_supplier')) return {};
-
-    Map<String, String?> supplierMap = {};
-    const batchSize = 50;
-    final batches = <List<Map<String, dynamic>>>[];
-    for (var i = 0; i < items.length; i += batchSize) {
-      batches.add(items.sublist(i, i + batchSize > items.length ? items.length : i + batchSize));
-    }
-
-    for (var batch in batches) {
-      try {
-        for (var item in batch) {
-          final productId = item['product_id']?.toString() ?? '';
-          final imei = item['imei']?.toString() ?? '';
-          final cacheKey = '$productId|$imei';
-          final supplier = await _fetchSupplierFromImportOrders(productId, imei);
-          supplierMap[cacheKey] = supplier;
-        }
-      } catch (e) {}
-    }
-
-    for (var item in items) {
-      final productId = item['product_id']?.toString() ?? '';
-      final imei = item['imei']?.toString() ?? '';
-      final cacheKey = '$productId|$imei';
-      supplierMap.putIfAbsent(cacheKey, () => null);
-    }
-
-    return supplierMap;
-  }
+  // ✅ ĐÃ XÓA: 
+  // - _fetchCustomerFromSaleOrders()
+  // - _fetchSupplierFromImportOrders()
+  // - _fetchCustomersForItems() 
+  // - _fetchSuppliersForItems()
+  // Lý do: Customer/Supplier đã có sẵn trong products table
+  // - Customer: lấy từ products.customer
+  // - Supplier: lấy từ products.supplier_id qua CacheUtil.getSupplierName()
+  // Việc query thêm từ sale_orders/import_orders gây chậm nghiêm trọng (N+1 problem)
 
   Future<void> _updateNote(int productId, String newNote) async {
     try {
@@ -923,8 +838,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
         return;
       }
 
-      Map<String, String?> customerMap = await _fetchCustomersForItems(allItems);
-      Map<String, String?> supplierMap = await _fetchSuppliersForItems(allItems);
+      // ✅ KHÔNG CẦN fetch customer/supplier riêng - đã có sẵn trong data
+      // Customer: products.customer
+      // Supplier: lấy từ supplier_id qua CacheUtil.getSupplierName()
 
       var excel = Excel.createExcel();
       Sheet sheet = excel['TonKho']; // ✅ Tạo sheet mới trước
@@ -962,10 +878,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
         final item = allItems[i];
         final productId = item['product_id']?.toString() ?? '';
         final imei = item['imei']?.toString() ?? '';
-        final cacheKey = '$productId|$imei';
 
-        String? customer = customerMap[cacheKey];
-        String? supplier = supplierMap[cacheKey];
+        // ✅ Lấy customer trực tiếp từ products.customer
+        String? customer = item['customer']?.toString();
+        
+        // ✅ Lấy supplier từ supplier_id qua cache (nhanh hơn nhiều)
+        String? supplier;
+        if (widget.permissions.contains('view_supplier')) {
+          final supplierId = item['supplier_id']?.toString();
+          supplier = supplierId != null ? CacheUtil.getSupplierName(supplierId) : null;
+        }
 
         List<TextCellValue> row = [
           TextCellValue((i + 1).toString()),
@@ -1045,6 +967,12 @@ class _InventoryScreenState extends State<InventoryScreen> {
     }
   }
 
+  // ✅ Helper function để format số tiền với dấu phân cách hàng nghìn
+  String _formatCurrency(num? value) {
+    if (value == null) return '';
+    return NumberFormat('#,###', 'vi_VN').format(value).replaceAll(',', '.');
+  }
+
   void _showProductDetails(Map<String, dynamic> product) async {
     final productId = product['id'] as int;
     final productNameId = product['product_id']?.toString();
@@ -1063,28 +991,38 @@ class _InventoryScreenState extends State<InventoryScreen> {
       'Trạng thái': product['status']?.toString(),
       'Kho': CacheUtil.getWarehouseName(product['warehouse_id']?.toString()),
       if (widget.permissions.contains('view_import_price'))
-        'Giá nhập': product['import_price'] != null ? '${product['import_price']} ${product['import_currency'] ?? ''}' : null,
+        'Giá nhập': product['import_price'] != null 
+            ? '${_formatCurrency(product['import_price'] as num?)} ${product['import_currency'] ?? ''}' 
+            : null,
       if (widget.permissions.contains('view_cost_price'))
-        'Giá vốn': product['cost_price'] != null ? product['cost_price'].toString() : null,
+        'Giá vốn': product['cost_price'] != null 
+            ? _formatCurrency(product['cost_price'] as num?) 
+            : null,
       'Ngày nhập': product['import_date']?.toString(),
       if (widget.permissions.contains('view_supplier') && supplier != null)
         'Nhà cung cấp': supplier,
       'Ngày trả hàng': product['return_date']?.toString(),
-      'Tiền fix lỗi': product['fix_price']?.toString(),
+      'Tiền fix lỗi': product['fix_price'] != null 
+          ? _formatCurrency(product['fix_price'] as num?) 
+          : null,
       'Ngày gửi fix lỗi': product['send_fix_date']?.toString(),
-      'Cước vận chuyển': product['transport_fee']?.toString(),
+      'Cước vận chuyển': product['transport_fee'] != null 
+          ? _formatCurrency(product['transport_fee'] as num?) 
+          : null,
       'Đơn vị vận chuyển': product['transporter']?.toString(),
       'Ngày chuyển kho': product['send_transfer_date']?.toString(),
       'Ngày nhập kho': product['import_transfer_date']?.toString(),
       if (widget.permissions.contains('view_sale_price'))
-        'Giá bán': product['sale_price']?.toString(),
+        'Giá bán': product['sale_price'] != null 
+            ? _formatCurrency(product['sale_price'] as num?) 
+            : null,
       if (widget.permissions.contains('view_customer') && customer != null)
         'Khách hàng': customer,
       'Tiền cọc': product['customer_price'] != null && (product['customer_price'] as num) > 0
-          ? product['customer_price'].toString()
+          ? _formatCurrency(product['customer_price'] as num?)
           : null,
       'Tiền COD': product['transporter_price'] != null && (product['transporter_price'] as num) > 0
-          ? product['transporter_price'].toString()
+          ? _formatCurrency(product['transporter_price'] as num?)
           : null,
       'Ngày bán': product['sale_date']?.toString(),
       'Nhân viên bán': product['saleman']?.toString(),

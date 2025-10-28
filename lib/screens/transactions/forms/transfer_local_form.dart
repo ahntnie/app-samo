@@ -579,8 +579,16 @@ class _TransferLocalFormState extends State<TransferLocalForm> {
   // Show confirmation dialog
   void showConfirmDialog() {
     if (isSubmitting) return;
+    
+    // Set isSubmitting ngay để ngăn double-submit
+    setState(() {
+      isSubmitting = true;
+    });
 
     if (transporter == null || productId == null || imeiList.isEmpty) {
+      setState(() {
+        isSubmitting = false;
+      });
       showDialog(
         context: context,
         builder: (context) => AlertDialog(
@@ -598,6 +606,9 @@ class _TransferLocalFormState extends State<TransferLocalForm> {
     }
 
     if (imeiList.length > maxImeiQuantity) {
+      setState(() {
+        isSubmitting = false;
+      });
       showDialog(
         context: context,
         builder: (context) => AlertDialog(
@@ -637,7 +648,7 @@ class _TransferLocalFormState extends State<TransferLocalForm> {
             child: const Text('Sửa lại'),
           ),
           ElevatedButton(
-            onPressed: () async {
+            onPressed: isSubmitting ? null : () async {
               Navigator.pop(dialogContext);
               await saveTransfer(imeiList);
             },

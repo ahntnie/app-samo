@@ -93,6 +93,7 @@ class _ReimportFormState extends State<ReimportForm> {
   Map<String, String> customerIdMap = {}; // Map customer name to id
   List<String> usedImeis = [];
   bool isLoading = true;
+  bool isProcessing = false;
   String? errorMessage;
   String? imeiError;
   bool isImeiManual = true;
@@ -739,7 +740,17 @@ class _ReimportFormState extends State<ReimportForm> {
   }
 
   Future<void> showConfirmDialog() async {
+    if (isProcessing) return;
+    
+    // Set isProcessing ngay để ngăn double-submit
+    setState(() {
+      isProcessing = true;
+    });
+
     if (productId == null || warehouseId == null) {
+      setState(() {
+        isProcessing = false;
+      });
       if (mounted) {
         showDialog(
           context: context,
@@ -759,6 +770,9 @@ class _ReimportFormState extends State<ReimportForm> {
     }
 
     if (selectedTarget == 'Khách Hàng' && (currency == null || account == null)) {
+      setState(() {
+        isProcessing = false;
+      });
       if (mounted) {
         showDialog(
           context: context,
@@ -830,7 +844,7 @@ class _ReimportFormState extends State<ReimportForm> {
                 child: const Text('Sửa lại'),
               ),
               ElevatedButton(
-                onPressed: () async {
+                onPressed: isProcessing ? null : () async {
                   Navigator.pop(dialogContext);
                   await _processReimportOrder(itemsToProcess);
                 },
@@ -841,6 +855,9 @@ class _ReimportFormState extends State<ReimportForm> {
         );
       }
     } catch (e) {
+      setState(() {
+        isProcessing = false;
+      });
       if (mounted) {
         showDialog(
           context: context,

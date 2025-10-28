@@ -398,8 +398,16 @@ class _FixReceiveSummaryState extends State<FixReceiveSummary> {
 
   Future<void> createTicket(BuildContext scaffoldContext) async {
     if (isProcessing) return;
+    
+    // Set isProcessing ngay để ngăn double-submit
+    setState(() {
+      isProcessing = true;
+    });
 
     if (account == null) {
+      setState(() {
+        isProcessing = false;
+      });
       if (mounted) {
         await showDialog(
           context: scaffoldContext,
@@ -419,6 +427,9 @@ class _FixReceiveSummaryState extends State<FixReceiveSummary> {
     }
 
     if (ticketItems.isEmpty) {
+      setState(() {
+        isProcessing = false;
+      });
       if (mounted) {
         showDialog(
           context: scaffoldContext,
@@ -438,6 +449,9 @@ class _FixReceiveSummaryState extends State<FixReceiveSummary> {
     }
 
     if (ticketItems.length > maxTicketItems) {
+      setState(() {
+        isProcessing = false;
+      });
       if (mounted) {
         showDialog(
           context: scaffoldContext,
@@ -458,6 +472,9 @@ class _FixReceiveSummaryState extends State<FixReceiveSummary> {
 
     final allImeis = ticketItems.expand((item) => (item['imei'] as String).split(',').where((e) => e.trim().isNotEmpty)).toList();
     if (allImeis.length > maxImeiLimit) {
+      setState(() {
+        isProcessing = false;
+      });
       if (mounted) {
         showDialog(
           context: scaffoldContext,
@@ -476,11 +493,12 @@ class _FixReceiveSummaryState extends State<FixReceiveSummary> {
       return;
     }
 
-    if (!await _validateImeis(allImeis)) return;
-
-    setState(() {
-      isProcessing = true;
-    });
+    if (!await _validateImeis(allImeis)) {
+      setState(() {
+        isProcessing = false;
+      });
+      return;
+    }
 
     final ticketId = generateTicketId();
 

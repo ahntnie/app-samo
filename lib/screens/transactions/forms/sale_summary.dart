@@ -446,8 +446,16 @@ class _SaleSummaryState extends State<SaleSummary> {
 
   Future<void> createTicket(BuildContext scaffoldContext) async {
     if (isProcessing) return;
+    
+    // Set isProcessing ngay để ngăn double-submit
+    setState(() {
+      isProcessing = true;
+    });
 
     if (account == null) {
+      setState(() {
+        isProcessing = false;
+      });
       await showDialog(
         context: scaffoldContext,
         builder: (context) => AlertDialog(
@@ -465,6 +473,9 @@ class _SaleSummaryState extends State<SaleSummary> {
     }
 
     if (account == 'Ship COD' && transporter == null) {
+      setState(() {
+        isProcessing = false;
+      });
       await showDialog(
         context: scaffoldContext,
         builder: (context) => AlertDialog(
@@ -487,6 +498,9 @@ class _SaleSummaryState extends State<SaleSummary> {
       final imeiList = (item['imei'] as String).split(',').where((e) => e.trim().isNotEmpty).toList();
       for (var imei in imeiList) {
         if (imeiMap.containsKey(imei)) {
+          setState(() {
+            isProcessing = false;
+          });
           await showDialog(
             context: scaffoldContext,
             builder: (context) => AlertDialog(
@@ -508,6 +522,9 @@ class _SaleSummaryState extends State<SaleSummary> {
     }
 
     if (allImeis.any((imei) => imei.trim().isEmpty)) {
+      setState(() {
+        isProcessing = false;
+      });
       await showDialog(
         context: scaffoldContext,
         builder: (context) => AlertDialog(
@@ -532,6 +549,9 @@ class _SaleSummaryState extends State<SaleSummary> {
 
     if (account == 'Ship COD') {
       if (depositValue > customerDebt) {
+        setState(() {
+          isProcessing = false;
+        });
         await showDialog(
           context: scaffoldContext,
           builder: (context) => AlertDialog(
@@ -563,6 +583,9 @@ class _SaleSummaryState extends State<SaleSummary> {
 
         final invalidImeis = allImeis.where((imei) => !validImeis.contains(imei)).toList();
         if (invalidImeis.isNotEmpty) {
+          setState(() {
+            isProcessing = false;
+          });
           await showDialog(
             context: scaffoldContext,
             builder: (context) => AlertDialog(
@@ -580,6 +603,9 @@ class _SaleSummaryState extends State<SaleSummary> {
           return;
         }
       } catch (e) {
+        setState(() {
+          isProcessing = false;
+        });
         await showDialog(
           context: scaffoldContext,
           builder: (context) => AlertDialog(
@@ -596,10 +622,6 @@ class _SaleSummaryState extends State<SaleSummary> {
         return;
       }
     }
-
-    setState(() {
-      isProcessing = true;
-    });
 
     try {
       final now = DateTime.now();

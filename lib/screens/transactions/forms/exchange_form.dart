@@ -46,6 +46,7 @@ class _ExchangeFormState extends State<ExchangeForm> {
   double rate = 1;
   double receiveAmount = 0;
   String? note;
+  bool isProcessing = false;
   List<Map<String, dynamic>> accounts = [];
 
   final TextEditingController amountController = TextEditingController();
@@ -129,6 +130,8 @@ class _ExchangeFormState extends State<ExchangeForm> {
   }
 
   void showConfirm() {
+    if (isProcessing) return;
+    
     if (fromAccountName == null || toAccountName == null) {
       _showErrorDialog('Tài khoản không hợp lệ');
       return;
@@ -186,8 +189,11 @@ class _ExchangeFormState extends State<ExchangeForm> {
                 child: const Text('Sửa'),
               ),
               ElevatedButton(
-                onPressed: () async {
+                onPressed: isProcessing ? null : () async {
                   Navigator.pop(context);
+                  setState(() {
+                    isProcessing = true;
+                  });
                   await _createExchangeTicket(
                     fromAcc,
                     toAcc,
@@ -297,9 +303,13 @@ class _ExchangeFormState extends State<ExchangeForm> {
         rate = 1;
         receiveAmount = 0;
         note = null;
+        isProcessing = false;
         _fetchAccounts();
       });
     } catch (e) {
+      setState(() {
+        isProcessing = false;
+      });
       _showErrorDialog('Lỗi khi tạo phiếu đổi tiền: $e');
     }
   }
@@ -480,7 +490,7 @@ class _ExchangeFormState extends State<ExchangeForm> {
                       ),
                       const SizedBox(height: 20),
                       ElevatedButton(
-                        onPressed: showConfirm,
+                        onPressed: isProcessing ? null : showConfirm,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.blue,
                           foregroundColor: Colors.white,

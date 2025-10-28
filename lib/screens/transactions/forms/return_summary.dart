@@ -327,7 +327,17 @@ class _ReturnSummaryState extends State<ReturnSummary> {
   }
 
   void showConfirmDialog(BuildContext scaffoldContext) async {
+    if (isProcessing) return;
+    
+    // Set isProcessing ngay để ngăn double-submit
+    setState(() {
+      isProcessing = true;
+    });
+
     if (account == null) {
+      setState(() {
+        isProcessing = false;
+      });
       if (mounted) {
         await showDialog(
           context: scaffoldContext,
@@ -348,6 +358,9 @@ class _ReturnSummaryState extends State<ReturnSummary> {
     }
 
     if (widget.ticketItems.isEmpty) {
+      setState(() {
+        isProcessing = false;
+      });
       if (mounted) {
         await showDialog(
           context: scaffoldContext,
@@ -370,6 +383,9 @@ class _ReturnSummaryState extends State<ReturnSummary> {
     // Kiểm tra tính hợp lệ của đơn vị tiền tệ
     final currencies = widget.ticketItems.map((item) => item['currency'] as String).toSet();
     if (currencies.length > 1) {
+      setState(() {
+        isProcessing = false;
+      });
       if (mounted) {
         await showDialog(
           context: scaffoldContext,
@@ -412,6 +428,9 @@ class _ReturnSummaryState extends State<ReturnSummary> {
     try {
       final isValid = await _validateForeignKeys();
       if (!isValid) {
+        setState(() {
+          isProcessing = false;
+        });
         if (mounted) {
           Navigator.pop(scaffoldContext); // Đóng dialog "Đang xử lý"
           await showDialog(

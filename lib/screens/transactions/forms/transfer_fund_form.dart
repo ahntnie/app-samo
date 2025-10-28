@@ -44,6 +44,7 @@ class _TransferFundFormState extends State<TransferFundForm> {
   String? fromAccountName;
   String? toAccountName;
   String? note;
+  bool isProcessing = false;
   List<Map<String, dynamic>> accounts = [];
 
   final TextEditingController amountController = TextEditingController();
@@ -121,6 +122,8 @@ class _TransferFundFormState extends State<TransferFundForm> {
   }
 
   void showConfirm() {
+    if (isProcessing) return;
+    
     final fromAcc = _getAccount(fromAccountName);
     final toAcc = _getAccount(toAccountName);
 
@@ -167,8 +170,11 @@ class _TransferFundFormState extends State<TransferFundForm> {
                 child: const Text('Sửa'),
               ),
               ElevatedButton(
-                onPressed: () async {
+                onPressed: isProcessing ? null : () async {
                   Navigator.pop(context);
+                  setState(() {
+                    isProcessing = true;
+                  });
                   await _createTransferTicket(
                     fromAcc,
                     toAcc,
@@ -273,9 +279,13 @@ class _TransferFundFormState extends State<TransferFundForm> {
         fromAccountName = null;
         toAccountName = null;
         note = null;
+        isProcessing = false;
         _fetchAccounts();
       });
     } catch (e) {
+      setState(() {
+        isProcessing = false;
+      });
       _showErrorDialog('Lỗi khi tạo phiếu chuyển quỹ: $e');
     }
   }
@@ -433,7 +443,7 @@ class _TransferFundFormState extends State<TransferFundForm> {
                       ),
                       const SizedBox(height: 20),
                       ElevatedButton(
-                        onPressed: showConfirm,
+                        onPressed: isProcessing ? null : showConfirm,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.blue,
                           foregroundColor: Colors.white,

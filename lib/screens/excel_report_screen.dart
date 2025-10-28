@@ -7,7 +7,6 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:share_plus/share_plus.dart';
 import 'dart:io';
 import 'package:device_info_plus/device_info_plus.dart';
-import '../helpers/error_handler.dart';
 
 class ExcelReportScreen extends StatefulWidget {
   final List<String> permissions;
@@ -500,6 +499,7 @@ class _ExcelReportScreenState extends State<ExcelReportScreen> {
         'reimport_orders': {
           'ID': 'id',
           'Ticket ID': 'ticket_id',
+          'ID Khách hàng': 'customer_id',
           'Khách hàng': 'customer',
           'Sản phẩm': 'product',
           'ID Sản phẩm': 'product_id',
@@ -712,7 +712,7 @@ class _ExcelReportScreenState extends State<ExcelReportScreen> {
           query = query.eq('iscancelled', false);
         }
         if (hasCreatedAt) {
-          query = query.order('created_at', ascending: false).limit(1000);
+          query = query.order('created_at', ascending: false).limit(5000);
         }
 
         final response = await query;
@@ -924,6 +924,7 @@ class _ExcelReportScreenState extends State<ExcelReportScreen> {
         'Phiếu nhập lại hàng': {
           'ID': 'id',
           'Ticket ID': 'ticket_id',
+          'ID Khách hàng': 'customer_id',
           'Khách hàng': 'customer',
           'Sản phẩm': 'product',
           'ID Sản phẩm': 'product_id',
@@ -1307,41 +1308,68 @@ class _ExcelReportScreenState extends State<ExcelReportScreen> {
 
     if (confirm != true) return;
 
+    // Hiển thị loading dialog
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: const [
+            CircularProgressIndicator(),
+            SizedBox(height: 16),
+            Text(
+              'Đang xóa dữ liệu...',
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+
     try {
       final tablesToReset = [
-        'fix_units',
-        'import_orders',
-        'products',
         'customers',
+        'financial_orders',
         'fix_receive_orders',
         'fix_send_orders',
-        'financial_orders',
-        'suppliers',
-        'reimport_orders',
-        'transporters',
-        'shipping_rates',
-        'warehouses',
-        'sale_orders',
-        'return_orders',
-        'financial_accounts',
-        'transporter_orders',
+        'fix_units',
+        'import_orders',
         'orders',
+        'products',
         'products_name',
+        'reimport_orders',
+        'return_orders',
+        'sale_orders',
+        'shipping_rates',
+        'suppliers',
+        'transporter_orders',
+        'transporters',
+        'warehouses',
       ];
 
       for (var table in tablesToReset) {
-        await widget.tenantClient.from(table).delete().neq('id', 0);
-        print('Đã xóa dữ liệu từ bảng $table');
+        try {
+          // ✅ Xóa TOÀN BỘ dữ liệu bằng cách sử dụng điều kiện luôn đúng
+          // Supabase yêu cầu phải có điều kiện WHERE, nên dùng neq với giá trị không thể tồn tại
+          await widget.tenantClient.from(table).delete().neq('id', '00000000-0000-0000-0000-000000000000');
+          print('✓ Đã xóa toàn bộ dữ liệu từ bảng $table');
+        } catch (e) {
+          print('✗ Lỗi khi xóa dữ liệu từ bảng $table: $e');
+          // Tiếp tục xóa các bảng khác
+        }
       }
 
       await _loadReportFiles();
 
       if (mounted) {
+        Navigator.pop(context); // Đóng loading dialog
         _showSuccessDialog(context, 'Đã reset dữ liệu thành công. Vui lòng tạo phiếu đổi tiền để cập nhật tỉ giá.');
       }
     } catch (e) {
       print('Error resetting data: $e');
       if (mounted) {
+        Navigator.pop(context); // Đóng loading dialog
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Lỗi khi reset dữ liệu: $e')),
         );

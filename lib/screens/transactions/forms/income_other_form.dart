@@ -38,6 +38,7 @@ class _IncomeOtherFormState extends State<IncomeOtherForm> {
   String? currency;
   String? account;
   String? note;
+  bool isProcessing = false;
 
   List<String> currencies = [];
   List<String> accounts = [];
@@ -117,6 +118,8 @@ class _IncomeOtherFormState extends State<IncomeOtherForm> {
   }
 
   Future<void> showConfirm() async {
+    if (isProcessing) return;
+    
     if (amount == null || amount! <= 0 || currency == null || account == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Vui lòng nhập đầy đủ thông tin hợp lệ')),
@@ -158,6 +161,9 @@ class _IncomeOtherFormState extends State<IncomeOtherForm> {
           ElevatedButton(
             onPressed: () async {
               Navigator.pop(context);
+              setState(() {
+                isProcessing = true;
+              });
               try {
                 final financialOrderResponse = await widget.tenantClient.from('financial_orders').insert({
                   'type': 'income_other',
@@ -203,11 +209,15 @@ class _IncomeOtherFormState extends State<IncomeOtherForm> {
                     currency = currencies.isNotEmpty ? currencies.first : null;
                     account = null;
                     note = null;
+                    isProcessing = false;
                     fetchAccounts();
                   });
                 }
               } catch (e) {
                 if (mounted) {
+                  setState(() {
+                    isProcessing = false;
+                  });
                   await ErrorHandler.showErrorDialog(
                     context: context,
                     title: 'Lỗi tạo phiếu thu nhập khác',
@@ -319,7 +329,7 @@ class _IncomeOtherFormState extends State<IncomeOtherForm> {
               ),
               const SizedBox(height: 20),
               ElevatedButton(
-                onPressed: showConfirm,
+                onPressed: isProcessing ? null : showConfirm,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.blue,
                   foregroundColor: Colors.white,

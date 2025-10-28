@@ -49,6 +49,7 @@ class _PaymentFormState extends State<PaymentForm> {
   String? account;
   String? note;
   bool isLoading = true;
+  bool isProcessing = false;
   String? errorMessage;
 
   List<String> currencies = [];
@@ -342,6 +343,8 @@ class _PaymentFormState extends State<PaymentForm> {
   }
 
   Future<void> showConfirm() async {
+    if (isProcessing) return;
+    
     if (partnerName == null ||
         currency == null ||
         account == null ||
@@ -451,7 +454,10 @@ class _PaymentFormState extends State<PaymentForm> {
                 child: const Text('Sửa'),
               ),
               ElevatedButton(
-                onPressed: () async {
+                onPressed: isProcessing ? null : () async {
+                  setState(() {
+                    isProcessing = true;
+                  });
                   try {
                     final financialOrderResponse =
                         await widget.tenantClient
@@ -542,12 +548,16 @@ class _PaymentFormState extends State<PaymentForm> {
                             currencies.isNotEmpty ? currencies.first : null;
                         account = null;
                         note = null;
+                        isProcessing = false;
                         loadPartners();
                         loadAccounts();
                       });
                     }
                   } catch (e) {
                     if (mounted) {
+                      setState(() {
+                        isProcessing = false;
+                      });
                       Navigator.pop(context);
                       await ErrorHandler.showErrorDialog(
                         context: context,
@@ -764,7 +774,7 @@ class _PaymentFormState extends State<PaymentForm> {
                 ),
                 const SizedBox(height: 20),
                 ElevatedButton(
-                  onPressed: showConfirm,
+                  onPressed: isProcessing ? null : showConfirm,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.blue,
                     foregroundColor: Colors.white,

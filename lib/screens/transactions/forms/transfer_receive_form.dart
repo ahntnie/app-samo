@@ -742,32 +742,6 @@ class _TransferReceiveFormState extends State<TransferReceiveForm> {
     }
 
     List<String> imeis = imeiList;
-    double transportFeeValue = 0;
-    Map<String, double> feesPerProduct = {};
-    String? feeErrorMessage;
-
-    if (imeis.isNotEmpty) {
-      // Nếu đã nhập IMEI thủ công, lấy cước vận chuyển từ ô nhập nếu có
-      final enteredFee = double.tryParse(feeController.text.replaceAll('.', '')) ?? 0;
-      if (enteredFee > 0) {
-        if (enteredFee < 0) {
-          errors.add('Cước vận chuyển không được âm!');
-        } else {
-          transportFeeValue = enteredFee;
-          feesPerProduct = { for (var imei in imeis) imei: transportFeeValue / imeis.length };
-        }
-      } else {
-        // Nếu không nhập cước thủ công, tính tự động
-        try {
-          final feeData = await _calculateTransportFeeFromImeis(imeis);
-          transportFeeValue = feeData['totalFee'] as double;
-          feesPerProduct = feeData['feesPerProduct'] as Map<String, double>;
-          feeErrorMessage = feeData['error'] as String?;
-        } catch (e) {
-          errors.add('Lỗi khi tính cước vận chuyển: $e');
-        }
-      }
-    }
 
     if (imeis.isEmpty) {
       errors.add('Vui lòng sử dụng Auto IMEI để lấy IMEI tự động!');
@@ -786,6 +760,65 @@ class _TransferReceiveFormState extends State<TransferReceiveForm> {
       return;
     }
 
+    // ✅ Hiển thị loading dialog ngay khi bắt đầu tính toán
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: const [
+            CircularProgressIndicator(),
+            SizedBox(height: 16),
+            Text(
+              'Đang tính toán cước vận chuyển...',
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+
+    // Tính toán cước vận chuyển
+    double transportFeeValue = 0;
+    Map<String, double> feesPerProduct = {};
+    String? feeErrorMessage;
+
+    if (imeis.isNotEmpty) {
+      // Nếu đã nhập IMEI thủ công, lấy cước vận chuyển từ ô nhập nếu có
+      final enteredFee = double.tryParse(feeController.text.replaceAll('.', '')) ?? 0;
+      if (enteredFee > 0) {
+        if (enteredFee < 0) {
+          // Đóng loading dialog
+          if (mounted) Navigator.pop(context);
+          errors.add('Cước vận chuyển không được âm!');
+          _showErrorSnackBar(errors.join('\n'));
+          return;
+        } else {
+          transportFeeValue = enteredFee;
+          feesPerProduct = { for (var imei in imeis) imei: transportFeeValue / imeis.length };
+        }
+      } else {
+        // Nếu không nhập cước thủ công, tính tự động
+        try {
+          final feeData = await _calculateTransportFeeFromImeis(imeis);
+          transportFeeValue = feeData['totalFee'] as double;
+          feesPerProduct = feeData['feesPerProduct'] as Map<String, double>;
+          feeErrorMessage = feeData['error'] as String?;
+        } catch (e) {
+          // Đóng loading dialog
+          if (mounted) Navigator.pop(context);
+          errors.add('Lỗi khi tính cước vận chuyển: $e');
+          _showErrorSnackBar(errors.join('\n'));
+          return;
+        }
+      }
+    }
+
+    // ✅ Đóng loading dialog
+    if (mounted) Navigator.pop(context);
+
+    // Hiển thị dialog xác nhận với thông tin đã tính toán
     final productName = productId != null ? productMap[productId] ?? 'Không xác định' : 'Không xác định';
     final warehouseName = warehouseId != null ? warehouseMap[warehouseId] ?? 'Không xác định' : 'Không xác định';
 

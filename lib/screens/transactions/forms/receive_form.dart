@@ -48,6 +48,7 @@ class _ReceiveFormState extends State<ReceiveForm> {
   String? currency;
   String? account;
   String? note;
+  bool isProcessing = false;
 
   final _formKey = GlobalKey<FormState>();
 
@@ -352,6 +353,8 @@ class _ReceiveFormState extends State<ReceiveForm> {
   }
 
   Future<void> submit() async {
+    if (isProcessing) return;
+    
     if (!_formKey.currentState!.validate()) return;
     if (partnerType == null ||
         partnerName == null ||
@@ -433,6 +436,9 @@ class _ReceiveFormState extends State<ReceiveForm> {
               ElevatedButton(
                 onPressed: () async {
                   Navigator.pop(context);
+                  setState(() {
+                    isProcessing = true;
+                  });
                   try {
                     final financialOrderResponse =
                         await widget.tenantClient
@@ -501,12 +507,18 @@ class _ReceiveFormState extends State<ReceiveForm> {
                         account = null;
                         note = null;
                         partnerNames = [];
+                        isProcessing = false;
                         loadAccounts();
                       });
                     }
 
                     Navigator.pop(context);
                   } catch (e) {
+                    if (mounted) {
+                      setState(() {
+                        isProcessing = false;
+                      });
+                    }
                     await ErrorHandler.showErrorDialog(
                       context: context,
                       title: 'Lỗi tạo phiếu thu',
@@ -742,7 +754,7 @@ class _ReceiveFormState extends State<ReceiveForm> {
                 ),
                 const SizedBox(height: 20),
                 ElevatedButton(
-                  onPressed: submit,
+                  onPressed: isProcessing ? null : submit,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.blue,
                     foregroundColor: Colors.white,

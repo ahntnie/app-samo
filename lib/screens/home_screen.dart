@@ -170,45 +170,7 @@ class _HomeScreenState extends State<HomeScreen> {
       });
     } else {
       print('⏭️ No auto-login: showing login screen');
-      // Kiểm tra nếu tài khoản chính là admin
-      await _checkAdminAccount();
-    }
-  }
-
-  Future<void> _checkAdminAccount() async {
-    try {
-      final user = Supabase.instance.client.auth.currentUser;
-      if (user != null) {
-        // Giả định email admin là một giá trị cụ thể, ví dụ: 'admin@example.com'
-        // Hoặc kiểm tra logic khác để xác định tài khoản admin
-        final adminEmail = 'admin@example.com'; // Thay bằng email admin thực tế
-        if (user.email == adminEmail) {
-          // Tìm tài khoản phụ admin trong sub_accounts
-          final response = await widget.tenantClient
-              .from('sub_accounts')
-              .select('id, username, password_hash, permissions')
-              .eq('username', 'admin')
-              .maybeSingle();
-
-          if (response != null) {
-            setState(() {
-              loggedInUsername = response['username'].toString();
-              permissions = allPermissions; // Gán toàn bộ quyền cho admin
-              isSubAccountLoggedIn = true;
-            });
-            final prefs = await SharedPreferences.getInstance();
-            await prefs.setBool('has_database_session', true);
-            if (rememberMe) {
-              await prefs.setString('home_username', 'admin');
-              // Lưu ý: Không lưu mật khẩu thật trong thực tế, đây chỉ là ví dụ
-              await prefs.setString('home_password', 'admin_password');
-              await prefs.setBool('home_rememberPassword', true);
-            }
-          }
-        }
-      }
-    } catch (e) {
-      print('Error checking admin account: $e');
+      // ✅ Không có hardcode tài khoản nào - Mọi user đều phải đăng nhập bình thường
     }
   }
 

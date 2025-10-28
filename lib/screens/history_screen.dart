@@ -3,7 +3,6 @@ import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:excel/excel.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:open_file/open_file.dart';
 import 'dart:io';
 import 'dart:developer' as developer;
@@ -27,18 +26,18 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
   final List<Map<String, String>> allTicketTypeOptions = [
     {'value': 'all', 'display': 'Tất cả', 'permission': ''},
-    {'value': 'cost', 'display': 'Chi phí', 'permission': 'access_financial_account_form'},
-    {'value': 'payment', 'display': 'Chi Thanh Toán Đối Tác', 'permission': 'access_financial_account_form'},
-    {'value': 'exchange', 'display': 'Đổi Tiền', 'permission': 'access_financial_account_form'},
-    {'value': 'income_other', 'display': 'Thu Nhập Khác', 'permission': 'access_financial_account_form'},
-    {'value': 'receive', 'display': 'Thu Tiền Đối Tác', 'permission': 'access_financial_account_form'},
+    {'value': 'cost', 'display': 'Chi phí', 'permission': 'access_cost_form'},
+    {'value': 'payment', 'display': 'Chi Thanh Toán Đối Tác', 'permission': 'access_payment_form'},
+    {'value': 'exchange', 'display': 'Đổi Tiền', 'permission': 'access_exchange_form'},
+    {'value': 'income_other', 'display': 'Thu Nhập Khác', 'permission': 'access_income_other_form'},
+    {'value': 'receive', 'display': 'Thu Tiền Đối Tác', 'permission': 'access_receive_form'},
+    {'value': 'transfer_fund', 'display': 'Chuyển Quỹ', 'permission': 'access_transfer_fund_form'},
     {'value': 'fix_receive_orders', 'display': 'Nhận Hàng Sửa Xong', 'permission': 'access_fix_receive_form'},
     {'value': 'fix_send_orders', 'display': 'Gửi Sửa', 'permission': 'access_fix_send_form'},
     {'value': 'import_orders', 'display': 'Nhập Hàng', 'permission': 'access_import_form'},
     {'value': 'reimport_orders', 'display': 'Nhập Lại Hàng', 'permission': 'access_reimport_form'},
     {'value': 'chuyển kho quốc tế', 'display': 'Chuyển Kho Quốc Tế', 'permission': 'access_transfer_global_form'},
     {'value': 'chuyển kho nội địa', 'display': 'Chuyển Kho Nội Địa', 'permission': 'access_transfer_local_form'},
-    {'value': 'transfer_fund', 'display': 'Chuyển Quỹ', 'permission': 'access_transaction_form'},
     {'value': 'nhập kho vận chuyển', 'display': 'Nhập Kho Vận Chuyển', 'permission': 'access_transfer_receive_form'},
     {'value': 'sale_orders', 'display': 'Bán Hàng', 'permission': 'access_sale_form'},
     {'value': 'return_orders', 'display': 'Trả Hàng', 'permission': 'access_return_form'},
@@ -352,6 +351,24 @@ class _HistoryScreenState extends State<HistoryScreen> {
     }
   }
 
+  String _filterPartnerName(String partnerName, String? table) {
+    // Kiểm tra quyền xem thông tin đối tác
+    // Nếu là khách hàng (customers, sale_orders, reimport_orders)
+    if (table == 'customers' || table == 'sale_orders' || table == 'reimport_orders') {
+      if (!widget.permissions.contains('view_customer')) {
+        return '[Bạn không có quyền xem thông tin khách hàng]';
+      }
+    }
+    // Nếu là nhà cung cấp (suppliers, import_orders, return_orders)
+    else if (table == 'suppliers' || table == 'import_orders' || table == 'return_orders') {
+      if (!widget.permissions.contains('view_supplier')) {
+        return '[Bạn không có quyền xem thông tin nhà cung cấp]';
+      }
+    }
+    
+    return partnerName; // Có quyền thì hiển thị bình thường
+  }
+
 
   String _getDisplayType(String type, String table) {
     String typeKey = type;
@@ -395,12 +412,19 @@ class _HistoryScreenState extends State<HistoryScreen> {
       return [];
     }
 
+    final hasAnyFinancialPermission = widget.permissions.contains('access_cost_form') ||
+        widget.permissions.contains('access_payment_form') ||
+        widget.permissions.contains('access_exchange_form') ||
+        widget.permissions.contains('access_income_other_form') ||
+        widget.permissions.contains('access_receive_form') ||
+        widget.permissions.contains('access_transfer_fund_form');
+
     final tables = [
-      if (widget.permissions.contains('access_financial_account_form'))
+      if (hasAnyFinancialPermission)
         {
           'table': 'financial_orders',
           'key': 'id',
-          'select': 'id, type, created_at, partner_name, partner_id, amount, currency, iscancelled, from_amount, from_currency, to_amount, to_currency, to_account, partner_type, account',
+          'select': 'id, type, created_at, partner_name, partner_id, amount, currency, iscancelled, from_amount, from_currency, to_amount, to_currency, to_account, partner_type, account, note',
           'partnerField': 'partner_name',
           'amountField': 'amount',
           'dateField': 'created_at',
@@ -410,7 +434,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         {
           'table': 'fix_receive_orders',
           'key': 'ticket_id',
-          'select': 'ticket_id, created_at, fixer, fix_unit_id, price, quantity, currency, account, iscancelled, product_id, warehouse_id, imei',
+          'select': 'ticket_id, created_at, fixer, fix_unit_id, price, quantity, currency, account, iscancelled, product_id, warehouse_id, imei, note',
           'partnerField': 'fix_unit_id',
           'amountField': 'price',
           'dateField': 'created_at',
@@ -420,7 +444,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         {
           'table': 'fix_send_orders',
           'key': 'ticket_id',
-          'select': 'ticket_id, created_at, fixer, fix_unit_id, quantity, iscancelled, product_id, warehouse_id, imei',
+          'select': 'ticket_id, created_at, fixer, fix_unit_id, quantity, iscancelled, product_id, warehouse_id, imei, note',
           'partnerField': 'fix_unit_id',
           'amountField': null,
           'dateField': 'created_at',
@@ -430,7 +454,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         {
           'table': 'import_orders',
           'key': 'id',
-          'select': 'id, created_at, supplier_id, price, quantity, total_amount, currency, account, iscancelled, product_id, warehouse_id, imei',
+          'select': 'id, created_at, supplier_id, price, quantity, total_amount, currency, account, iscancelled, product_id, warehouse_id, imei, note',
           'partnerField': 'supplier_id',
           'amountField': 'price',
           'dateField': 'created_at',
@@ -440,7 +464,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         {
           'table': 'reimport_orders',
           'key': 'ticket_id',
-          'select': 'ticket_id, created_at, customer_id, price, quantity, currency, account, iscancelled, product_id, warehouse_id, imei',
+          'select': 'ticket_id, created_at, customer_id, price, quantity, currency, account, iscancelled, product_id, warehouse_id, imei, note',
           'partnerField': 'customer_id',
           'amountField': 'price',
           'dateField': 'created_at',
@@ -450,7 +474,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         {
           'table': 'sale_orders',
           'key': 'ticket_id',
-          'select': 'ticket_id, created_at, customer_id, price, quantity, currency, account, customer_price, transporter_price, transporter, iscancelled, product_id, warehouse_id, imei, saleman',
+          'select': 'ticket_id, created_at, customer_id, price, quantity, currency, account, customer_price, transporter_price, transporter, iscancelled, product_id, warehouse_id, imei, saleman, note',
           'partnerField': 'customer_id',
           'amountField': 'price',
           'dateField': 'created_at',
@@ -460,7 +484,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         {
           'table': 'return_orders',
           'key': 'ticket_id',
-          'select': 'ticket_id, created_at, supplier_id, price, quantity, total_amount, currency, account, iscancelled, product_id, warehouse_id, imei',
+          'select': 'ticket_id, created_at, supplier_id, price, quantity, total_amount, currency, account, iscancelled, product_id, warehouse_id, imei, note',
           'partnerField': 'supplier_id',
           'amountField': 'price',
           'dateField': 'created_at',
@@ -470,7 +494,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         {
           'table': 'transporter_orders',
           'key': 'id',
-          'select': 'id, ticket_id, type, created_at, transporter, transport_fee, iscancelled, product_id, warehouse_id, imei',
+          'select': 'id, ticket_id, type, created_at, transporter, transport_fee, iscancelled, product_id, warehouse_id, imei, note',
           'partnerField': 'transporter',
           'amountField': 'transport_fee',
           'dateField': 'created_at',
@@ -558,14 +582,18 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 tx['partner_type']?.toString(),
                 tx[partnerField]?.toString(),
               );
+              // Lọc theo quyền dựa vào partner_type
+              partnerName = _filterPartnerName(partnerName, tx['partner_type']?.toString());
             } else if (tableName == 'import_orders' || tableName == 'return_orders') {
               // Nhà cung cấp - dùng supplier_id
               final supplierId = tx[partnerField]?.toString();
               partnerName = supplierId != null ? (supplierMap[supplierId] ?? 'N/A') : 'N/A';
+              partnerName = _filterPartnerName(partnerName, tableName);
             } else if (tableName == 'sale_orders' || tableName == 'reimport_orders') {
               // Khách hàng - dùng customer_id
               final customerId = tx[partnerField]?.toString();
               partnerName = customerId != null ? (customerMap[customerId] ?? 'N/A') : 'N/A';
+              partnerName = _filterPartnerName(partnerName, tableName);
             } else if (tableName == 'fix_send_orders' || tableName == 'fix_receive_orders') {
               // Đơn vị fix - dùng fix_unit_id nếu có, nếu không dùng fixer (tên)
               final fixUnitId = tx['fix_unit_id']?.toString();
@@ -594,6 +622,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
               'product_name': productName,
               'warehouse_name': warehouseName,
               'imei': tableName == 'transporter_orders' || tableName == 'fix_send_orders' || tableName == 'fix_receive_orders' || tableName == 'sale_orders' || tableName == 'return_orders' || tableName == 'reimport_orders' || tableName == 'import_orders' ? '' : null,
+              'note': tx['note']?.toString() ?? '',
             };
           }
 
@@ -605,14 +634,18 @@ class _HistoryScreenState extends State<HistoryScreen> {
               tx['partner_type']?.toString(),
               tx[partnerField]?.toString(),
             );
+            // Lọc theo quyền dựa vào partner_type
+            itemPartnerName = _filterPartnerName(itemPartnerName, tx['partner_type']?.toString());
           } else if (tableName == 'import_orders' || tableName == 'return_orders') {
             // Nhà cung cấp - dùng supplier_id
             final supplierId = tx[partnerField]?.toString();
             itemPartnerName = supplierId != null ? (supplierMap[supplierId] ?? 'N/A') : 'N/A';
+            itemPartnerName = _filterPartnerName(itemPartnerName, tableName);
           } else if (tableName == 'sale_orders' || tableName == 'reimport_orders') {
             // Khách hàng - dùng customer_id
             final customerId = tx[partnerField]?.toString();
             itemPartnerName = customerId != null ? (customerMap[customerId] ?? 'N/A') : 'N/A';
+            itemPartnerName = _filterPartnerName(itemPartnerName, tableName);
           } else if (tableName == 'fix_send_orders' || tableName == 'fix_receive_orders') {
             // Đơn vị fix - dùng fix_unit_id nếu có, nếu không dùng fixer (tên)
             final fixUnitId = tx['fix_unit_id']?.toString();
@@ -703,7 +736,24 @@ class _HistoryScreenState extends State<HistoryScreen> {
       }
     }
 
+    // Lọc theo filterType
     allTickets = allTickets.where((ticket) => filterType == 'all' || ticket['type'] == filterType).toList();
+
+    // Lọc các phiếu tài chính theo quyền cụ thể
+    allTickets = allTickets.where((ticket) {
+      if (ticket['table'] != 'financial_orders') return true; // Không phải phiếu tài chính thì giữ lại
+      
+      final type = ticket['type'] as String;
+      // Kiểm tra quyền cho từng loại phiếu tài chính
+      if (type == 'cost' && !widget.permissions.contains('access_cost_form')) return false;
+      if (type == 'payment' && !widget.permissions.contains('access_payment_form')) return false;
+      if (type == 'exchange' && !widget.permissions.contains('access_exchange_form')) return false;
+      if (type == 'income_other' && !widget.permissions.contains('access_income_other_form')) return false;
+      if (type == 'receive' && !widget.permissions.contains('access_receive_form')) return false;
+      if (type == 'transfer_fund' && !widget.permissions.contains('access_transfer_fund_form')) return false;
+      
+      return true; // Có quyền thì giữ lại
+    }).toList();
 
     allTickets.sort((a, b) {
       final dateA = DateTime.tryParse(a['date']?.toString() ?? '1900-01-01') ?? DateTime(1900);
@@ -767,6 +817,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 if (ticket['items'][0]['account'] != null && !isFinancialTicket)
                   Text('Tài Khoản: ${ticket['items'][0]['account']}'),
                 if (saleman != null) Text('Nhân viên bán: $saleman'),
+                if (ticket['note'] != null && ticket['note'].toString().isNotEmpty)
+                  Text('Ghi chú: ${ticket['note']}'),
                 if (!isFinancialTicket) ...[
                   ...ticket['items'].map<Widget>((item) {
                     final productName = item['product_name']?.toString() ?? 'N/A';
@@ -1199,17 +1251,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
     );
 
     try {
-      if (Platform.isAndroid) {
-        final status = await Permission.storage.request();
-        if (!status.isGranted) {
-          Navigator.pop(context);
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Cần quyền lưu trữ để xuất Excel')),
-          );
-          return;
-        }
-      }
-
+      // Android 11+ (API 30+) sử dụng Scoped Storage, không cần xin quyền WRITE_EXTERNAL_STORAGE
+      // Chỉ cần lưu vào thư mục Documents hoặc Downloads của app
+      
       List<Map<String, dynamic>> exportTickets = tickets;
       if (hasMoreData && filterType == 'all' && dateFrom == null && dateTo == null) {
         exportTickets = await _fetchTickets(paginated: false);
@@ -1239,6 +1283,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         TextCellValue('Ngày'),
         TextCellValue('Tài Khoản'),
         TextCellValue('Nhân viên bán'),
+        TextCellValue('Ghi chú'),
       ];
 
       sheet.appendRow(headers);
@@ -1264,6 +1309,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
               ? item['account'].toString()
               : '';
           final saleman = item['saleman']?.toString() ?? '';
+          final note = ticket['note']?.toString() ?? '';
 
           sheet.appendRow([
             TextCellValue(type),
@@ -1277,6 +1323,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
             TextCellValue(date),
             TextCellValue(account),
             TextCellValue(saleman),
+            TextCellValue(note),
           ]);
         }
       }
@@ -1288,9 +1335,15 @@ class _HistoryScreenState extends State<HistoryScreen> {
         print('Không tìm thấy Sheet1 sau khi tạo các sheet.');
       }
 
+      // Lấy thư mục lưu file tùy theo phiên bản Android
       Directory downloadsDir;
       if (Platform.isAndroid) {
-        downloadsDir = Directory('/storage/emulated/0/Download');
+        // Android 11+ (API 30+): Sử dụng getExternalStorageDirectory hoặc Documents
+        // Không cần quyền MANAGE_EXTERNAL_STORAGE
+        final directory = await getApplicationDocumentsDirectory();
+        downloadsDir = Directory('${directory.path}/Excel');
+        
+        // Tạo thư mục Excel nếu chưa tồn tại
         if (!await downloadsDir.exists()) {
           await downloadsDir.create(recursive: true);
         }
