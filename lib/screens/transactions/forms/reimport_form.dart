@@ -327,7 +327,7 @@ class _ReimportFormState extends State<ReimportForm> {
       final response = await retry(
         () => supabase
             .from('sale_orders')
-            .select('customer, customer_price, transporter_price, price, currency, account')
+            .select('customer, customer_id, customer_price, transporter_price, price, currency, account')
             .eq('product_id', productId!)
             .like('imei', '%$input%')
             .order('created_at', ascending: false)
@@ -391,6 +391,19 @@ class _ReimportFormState extends State<ReimportForm> {
         return;
       }
 
+      // Lấy customer_id từ response hoặc tra cứu từ customerIdMap
+      String? customerId;
+      final customerIdFromResponse = response['customer_id'];
+      if (customerIdFromResponse != null) {
+        customerId = customerIdFromResponse.toString();
+      } else {
+        // Fallback: tra cứu từ customerIdMap dựa trên tên (cho backward compatibility)
+        final customerName = response['customer'] as String?;
+        if (customerName != null) {
+          customerId = customerIdMap[customerName];
+        }
+      }
+
       if (mounted) {
         setState(() {
           addedItems.add({
@@ -399,6 +412,7 @@ class _ReimportFormState extends State<ReimportForm> {
             'product_name': CacheUtil.getProductName(productId),
             'isCod': true,
             'customer': response['customer'] as String? ?? 'Không xác định',
+            'customer_id': customerId, // ✅ Lưu customer_id thay vì chỉ lưu tên
             'customer_price': customerPrice,
             'transporter_price': transporterPrice,
             'transporter': productResponse['transporter'] as String? ?? 'Không xác định',
@@ -673,11 +687,25 @@ class _ReimportFormState extends State<ReimportForm> {
                 ? DateFormat('dd/MM/yyyy HH:mm').format(DateTime.parse(productResponse['sale_date'] as String))
                 : 'Không xác định';
 
+            // Lấy customer_id từ item hoặc tra cứu từ customerIdMap
+            String? customerIdForItem;
+            final customerIdFromItem = item['customer_id'];
+            if (customerIdFromItem != null) {
+              customerIdForItem = customerIdFromItem.toString();
+            } else {
+              // Fallback: tra cứu từ customerIdMap dựa trên tên (cho backward compatibility)
+              final customerName = item['customer'] as String?;
+              if (customerName != null) {
+                customerIdForItem = customerIdMap[customerName];
+              }
+            }
+
             allItems.add({
               'imei': individualImei,
               'product_id': productId,
               'product_name': CacheUtil.getProductName(productId),
               'customer': item['customer'] as String? ?? 'Không xác định',
+              'customer_id': customerIdForItem, // ✅ Lưu customer_id thay vì chỉ lưu tên
               'customer_price': customerPrice,
               'transporter_price': transporterPrice,
               'transporter': productResponse['transporter'] as String? ?? 'Không xác định',
@@ -740,17 +768,9 @@ class _ReimportFormState extends State<ReimportForm> {
   }
 
   Future<void> showConfirmDialog() async {
-    if (isProcessing) return;
-    
-    // Set isProcessing ngay để ngăn double-submit
-    setState(() {
-      isProcessing = true;
-    });
+    // Không khóa ở bước xác nhận; chỉ khóa khi bấm "Tạo phiếu"
 
     if (productId == null || warehouseId == null) {
-      setState(() {
-        isProcessing = false;
-      });
       if (mounted) {
         showDialog(
           context: context,
@@ -770,9 +790,6 @@ class _ReimportFormState extends State<ReimportForm> {
     }
 
     if (selectedTarget == 'Khách Hàng' && (currency == null || account == null)) {
-      setState(() {
-        isProcessing = false;
-      });
       if (mounted) {
         showDialog(
           context: context,
@@ -844,9 +861,19 @@ class _ReimportFormState extends State<ReimportForm> {
                 child: const Text('Sửa lại'),
               ),
               ElevatedButton(
-                onPressed: isProcessing ? null : () async {
+                onPressed: () async {
+                  if (isProcessing) return; // khóa nhấn nhanh
+                  if (mounted) {
+                    setState(() { isProcessing = true; });
+                  }
                   Navigator.pop(dialogContext);
-                  await _processReimportOrder(itemsToProcess);
+                  try {
+                    await _processReimportOrder(itemsToProcess);
+                  } finally {
+                    if (mounted) {
+                      setState(() { isProcessing = false; });
+                    }
+                  }
                 },
                 child: const Text('Tạo phiếu'),
               ),
@@ -926,12 +953,34 @@ class _ReimportFormState extends State<ReimportForm> {
 
           print('Inserting reimport order for IMEI ${item['imei']}, price: $reimportPrice');
 
-          // Get customer_id from customer name
-          final customerId = customerIdMap[item['customer']];
-          if (customerId == null) {
+          // ✅ Sử dụng customer_id trực tiếp từ item (đã lưu từ sale_orders)
+          final customerId = item['customer_id'] as String?;
+          if (customerId == null || customerId.isEmpty) {
+            // Fallback: tra cứu từ customerIdMap dựa trên tên (cho backward compatibility)
+            final fallbackCustomerId = customerIdMap[item['customer']];
+            if (fallbackCustomerId == null) {
             throw Exception('Không tìm thấy ID của khách hàng "${item['customer']}"!');
           }
+            // Sử dụng fallback ID
+            await retry(
+              () => supabase.from('reimport_orders').insert({
+                'ticket_id': ticketId,
+                'customer_id': int.parse(fallbackCustomerId),
+                'product_id': item['product_id'],
+                'warehouse_id': warehouseId,
+                'imei': item['imei'],
+                'quantity': 1,
+                'price': reimportPrice,
+                'currency': item['sale_currency'],
+                'account': account,
+                'note': note,
+                'created_at': now.toIso8601String(),
+              }),
+              operation: 'Insert reimport order for IMEI ${item['imei']}',
+            );
+          } else {
 
+            // ✅ Sử dụng customer_id trực tiếp từ item
           await retry(
             () => supabase.from('reimport_orders').insert({
               'ticket_id': ticketId,
@@ -948,6 +997,7 @@ class _ReimportFormState extends State<ReimportForm> {
             }),
             operation: 'Insert reimport order for IMEI ${item['imei']}',
           );
+          }
 
           await retry(
             () => supabase.from('products').update({
@@ -1008,9 +1058,29 @@ class _ReimportFormState extends State<ReimportForm> {
                   throw Exception('Loại tiền tệ không được hỗ trợ: $saleCurrency cho IMEI ${itemsByCurrency.first['imei']}');
                 }
 
-                final customerId = customerIdMap[customer];
-                if (customerId == null) {
+                // ✅ Lấy customer_id từ item đầu tiên (tất cả items trong group đều cùng customer_id)
+                final customerId = itemsByCurrency.first['customer_id'] as String?;
+                if (customerId == null || customerId.isEmpty) {
+                  // Fallback: tra cứu từ customerIdMap dựa trên tên
+                  final fallbackCustomerId = customerIdMap[customer];
+                  if (fallbackCustomerId == null) {
                   throw Exception('Không tìm thấy ID của khách hàng "$customer"!');
+                  }
+                  // Sử dụng fallback ID cho các bước tiếp theo
+                  final currentCustomer = await retry(
+                    () => supabase.from('customers').select('debt_vnd, debt_cny, debt_usd').eq('id', fallbackCustomerId).maybeSingle(),
+                    operation: 'Fetch customer debt',
+                  );
+                  if (currentCustomer == null) {
+                    throw Exception('Khách hàng "$customer" không tồn tại trong hệ thống!');
+                  }
+                  final currentDebt = (currentCustomer[debtColumn] as num?)?.toDouble() ?? 0.0;
+                  final updatedDebt = currentDebt - customerAmount;
+                  await retry(
+                    () => supabase.from('customers').update({debtColumn: updatedDebt}).eq('id', fallbackCustomerId),
+                    operation: 'Update customer debt for $debtColumn',
+                  );
+                  continue; // Skip to next currency group
                 }
                 final currentCustomer = await retry(
                   () => supabase.from('customers').select('debt_vnd, debt_cny, debt_usd').eq('id', customerId).maybeSingle(),
@@ -1090,10 +1160,21 @@ class _ReimportFormState extends State<ReimportForm> {
             final depositAmount = entry.value;
 
             if (customer != 'Không xác định') {
-              final customerId = customerIdMap[customer];
-              if (customerId == null) {
+              // ✅ Lấy customer_id từ items của customer này (tất cả items cùng customer_id)
+              final customerItems = customerGroups[customer] ?? [];
+              String? customerIdNullable = customerItems.isNotEmpty ? (customerItems.first['customer_id'] as String?) : null;
+              if (customerIdNullable == null || customerIdNullable.isEmpty) {
+                // Fallback: tra cứu từ customerIdMap dựa trên tên (cho backward compatibility)
+                final fallbackCustomerId = customerIdMap[customer];
+                if (fallbackCustomerId == null) {
                 throw Exception('Không tìm thấy ID của khách hàng "$customer"!');
               }
+                customerIdNullable = fallbackCustomerId;
+              }
+              
+              // Đảm bảo customerId không null trước khi sử dụng
+              final customerId = customerIdNullable;
+              
               final currentCustomer = await retry(
                 () => supabase.from('customers').select('debt_vnd').eq('id', customerId).maybeSingle(),
                 operation: 'Fetch customer debt for COD',
@@ -1147,11 +1228,139 @@ class _ReimportFormState extends State<ReimportForm> {
           amountsByCurrency[saleCurrency] = (amountsByCurrency[saleCurrency] ?? 0.0) + price;
         }
 
+        // Trừ doanh số từ sub_accounts khi nhập lại hàng
+        try {
+          // Map để lưu doanh số cần trừ theo từng nhân viên
+          final Map<String, double> doanhsoToDeduct = {};
+          
+          for (var item in items) {
+            final imei = item['imei'] as String;
+            
+            // ✅ Tìm phiếu bán gần nhất cho IMEI này (tìm chính xác IMEI trong danh sách)
+            // Fetch nhiều records để đảm bảo tìm được IMEI chính xác
+            final saleOrders = await retry(
+              () => supabase
+                  .from('sale_orders')
+                  .select('doanhso, quantity, saleman, imei, created_at')
+                  .like('imei', '%$imei%')
+                  .eq('iscancelled', false)
+                  .order('created_at', ascending: false)
+                  .limit(10), // Fetch nhiều hơn để filter chính xác
+              operation: 'Fetch sale orders for IMEI $imei',
+            );
+            
+            // ✅ Filter để tìm sale_order chứa IMEI chính xác
+            Map<String, dynamic>? saleOrder;
+            for (var order in saleOrders) {
+              final imeiString = order['imei']?.toString() ?? '';
+              final imeiList = imeiString.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+              // Kiểm tra IMEI có tồn tại chính xác trong danh sách
+              if (imeiList.contains(imei)) {
+                saleOrder = order;
+                break; // Tìm thấy IMEI chính xác, dừng lại
+              }
+            }
+            
+            if (saleOrder != null && saleOrder['saleman'] != null && saleOrder['saleman'].toString().isNotEmpty) {
+              final saleman = saleOrder['saleman'].toString();
+              final totalDoanhso = (saleOrder['doanhso'] as num?)?.toDouble() ?? 0.0;
+              
+              // Đếm số lượng IMEI trong phiếu bán
+              final imeiString = saleOrder['imei']?.toString() ?? '';
+              final imeiList = imeiString.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+              final imeiCount = imeiList.length > 0 ? imeiList.length : 1;
+              
+              // Tính doanh số mỗi sản phẩm = tổng doanh số / số lượng IMEI
+              final doanhsoPerItem = imeiCount > 0 ? totalDoanhso / imeiCount : 0.0;
+              
+              print('📊 Reimport IMEI $imei: Sale order doanhso=$totalDoanhso, quantity=$imeiCount, doanhso per item=$doanhsoPerItem, saleman=$saleman');
+              
+              // Cộng dồn doanh số cần trừ cho nhân viên này
+              doanhsoToDeduct[saleman] = (doanhsoToDeduct[saleman] ?? 0.0) + doanhsoPerItem;
+            } else {
+              print('⚠️ Reimport IMEI $imei: No sale order found or no saleman');
+            }
+          }
+          
+          // Update sub_accounts cho từng nhân viên
+          for (var entry in doanhsoToDeduct.entries) {
+            final saleman = entry.key;
+            final doanhsoToSubtract = entry.value;
+            
+            if (doanhsoToSubtract > 0) {
+              print('📊 Deducting doanhso $doanhsoToSubtract from salesman $saleman');
+              
+              // Fetch current doanhso
+              final currentAccount = await retry(
+                () => supabase
+                    .from('sub_accounts')
+                    .select('id, username, doanhso')
+                    .eq('username', saleman)
+                    .maybeSingle(),
+                operation: 'Get current doanhso for reimport',
+              );
+              
+              if (currentAccount != null) {
+                // Parse current doanhso - có thể là int hoặc double từ DB
+                final currentDoanhsoRaw = currentAccount['doanhso'];
+                final currentDoanhso = currentDoanhsoRaw is int 
+                    ? currentDoanhsoRaw.toDouble()
+                    : double.tryParse(currentDoanhsoRaw?.toString() ?? '0') ?? 0;
+                
+                // Tính doanh số mới = hiện tại - doanh số cần trừ
+                final newDoanhsoDouble = currentDoanhso - doanhsoToSubtract;
+                // Convert to int vì cột doanhso trong sub_accounts là INTEGER
+                final newDoanhso = newDoanhsoDouble.round();
+                
+                print('💰 Reimport: Current doanhso: $currentDoanhso, Subtracting: $doanhsoToSubtract, New total: $newDoanhso');
+                
+                await retry(
+                  () => supabase
+                      .from('sub_accounts')
+                      .update({'doanhso': newDoanhso}) // Gửi int thay vì double
+                      .eq('username', saleman),
+                  operation: 'Update sub_accounts doanhso for reimport',
+                );
+                
+                // Verify update
+                await Future.delayed(const Duration(milliseconds: 200));
+                final verifyAccount = await supabase
+                    .from('sub_accounts')
+                    .select('doanhso')
+                    .eq('username', saleman)
+                    .maybeSingle();
+                
+                if (verifyAccount != null) {
+                  final verifyDoanhso = int.tryParse(verifyAccount['doanhso']?.toString() ?? '0') ?? 0;
+                  if (verifyDoanhso == newDoanhso) {
+                    print('✅ Verified: Updated doanhso for salesman $saleman after reimport: $currentDoanhso - $doanhsoToSubtract = $newDoanhso');
+                  } else {
+                    print('❌ WARNING: Reimport doanhso verification failed. Expected: $newDoanhso, Got: $verifyDoanhso');
+                  }
+                }
+              } else {
+                print('❌ ERROR: sub_account not found for username: $saleman');
+              }
+            }
+          }
+        } catch (e, stackTrace) {
+          print('❌ ERROR: Failed to deduct doanhso for reimport: $e');
+          print('❌ Stack trace: $stackTrace');
+          // Không throw error để không làm fail toàn bộ transaction
+        }
+
         await NotificationService.showNotification(
           136,
           'Phiếu Nhập Lại Hàng Đã Tạo',
           'Đã tạo phiếu nhập lại hàng cho ${customerGroups.keys.join(', ')}',
           'reimport_created',
+        );
+        
+        // ✅ Gửi thông báo push đến tất cả thiết bị
+        await NotificationService.sendNotificationToAll(
+          'Phiếu Nhập Lại Hàng Đã Tạo',
+          'Đã tạo phiếu nhập lại hàng cho ${customerGroups.keys.join(', ')}',
+          data: {'type': 'reimport_created'},
         );
 
         if (mounted) {
@@ -1224,11 +1433,26 @@ class _ReimportFormState extends State<ReimportForm> {
     final snapshotData = <String, dynamic>{};
 
     try {
-      final customerNames = items.map((item) => item['customer'] as String).toSet();
-      for (var customer in customerNames) {
-        if (customer != 'Không xác định') {
-          final customerId = customerIdMap[customer];
-          if (customerId != null) {
+      // ✅ Lấy customer_id trực tiếp từ items thay vì tra cứu từ tên
+      final customerIds = <String>{};
+      for (var item in items) {
+        final customerId = item['customer_id'] as String?;
+        if (customerId != null && customerId.isNotEmpty) {
+          customerIds.add(customerId);
+        } else {
+          // Fallback: tra cứu từ customerIdMap dựa trên tên (cho backward compatibility)
+          final customerName = item['customer'] as String?;
+          if (customerName != null && customerName != 'Không xác định') {
+            final fallbackCustomerId = customerIdMap[customerName];
+            if (fallbackCustomerId != null) {
+              customerIds.add(fallbackCustomerId);
+            }
+          }
+        }
+      }
+      
+      // Fetch customer data cho tất cả customer_ids
+      for (var customerId in customerIds) {
             final customerData = await retry(
               () => supabase.from('customers').select().eq('id', customerId).maybeSingle(),
               operation: 'Fetch customer data',
@@ -1236,8 +1460,6 @@ class _ReimportFormState extends State<ReimportForm> {
             if (customerData != null) {
               snapshotData['customers'] = snapshotData['customers'] ?? [];
               snapshotData['customers'].add(customerData);
-            }
-          }
         }
       }
 
@@ -1291,10 +1513,21 @@ class _ReimportFormState extends State<ReimportForm> {
         final reimportPrice = item['reimport_price'] != null
             ? (item['reimport_price'] is num ? (item['reimport_price'] as num).toDouble() : 0.0)
             : (item['sale_price'] is num ? (item['sale_price'] as num).toDouble() : 0.0);
-        final customerId = customerIdMap[item['customer']];
+        // ✅ Sử dụng customer_id trực tiếp từ item thay vì tra cứu từ tên
+        final customerId = item['customer_id'] as String?;
+        int? parsedCustomerId;
+        if (customerId != null && customerId.isNotEmpty) {
+          parsedCustomerId = int.tryParse(customerId);
+        } else {
+          // Fallback: tra cứu từ customerIdMap dựa trên tên (cho backward compatibility)
+          final fallbackCustomerId = customerIdMap[item['customer']];
+          if (fallbackCustomerId != null) {
+            parsedCustomerId = int.tryParse(fallbackCustomerId);
+          }
+        }
         return {
           'ticket_id': ticketId,
-          'customer_id': customerId != null ? int.parse(customerId) : null,
+          'customer_id': parsedCustomerId,
           'product_id': item['product_id'],
           'product_name': item['product_name'],
           'warehouse_id': warehouseId,
@@ -1307,6 +1540,81 @@ class _ReimportFormState extends State<ReimportForm> {
           'note': note,
         };
       }).toList();
+
+      // ✅ Lưu snapshot của sub_accounts.doanhso TRƯỚC KHI trừ doanh số
+      // Tìm tất cả các nhân viên bán từ các sale_orders liên quan đến các IMEI
+      final Set<String> salesmanUsernames = {};
+      for (var item in items) {
+        final imei = item['imei'] as String;
+        try {
+          // Fetch sale_orders để tìm nhân viên bán
+          final saleOrders = await retry(
+            () => supabase
+                .from('sale_orders')
+                .select('saleman, imei, created_at')
+                .like('imei', '%$imei%')
+                .eq('iscancelled', false)
+                .order('created_at', ascending: false)
+                .limit(10),
+            operation: 'Fetch sale orders for snapshot (IMEI $imei)',
+          );
+          
+          // Filter để tìm sale_order chứa IMEI chính xác
+          for (var order in saleOrders) {
+            final imeiString = order['imei']?.toString() ?? '';
+            final imeiList = imeiString.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+            if (imeiList.contains(imei)) {
+              final saleman = order['saleman']?.toString();
+              if (saleman != null && saleman.isNotEmpty) {
+                salesmanUsernames.add(saleman);
+              }
+              break; // Tìm thấy IMEI chính xác, dừng lại
+            }
+          }
+        } catch (e) {
+          print('⚠️ WARNING: Failed to fetch sale order for snapshot (IMEI $imei): $e');
+          // Tiếp tục với các IMEI khác
+        }
+      }
+      
+      // Fetch và lưu doanhso hiện tại của các nhân viên TRƯỚC KHI trừ
+      if (salesmanUsernames.isNotEmpty) {
+        try {
+          final subAccounts = await retry(
+            () => supabase
+                .from('sub_accounts')
+                .select('id, username, doanhso')
+                .inFilter('username', salesmanUsernames.toList()),
+            operation: 'Fetch sub_accounts for snapshot',
+          );
+          
+          // Lưu snapshot cho từng nhân viên (có thể có nhiều nhân viên nếu có nhiều IMEI từ các nhân viên khác nhau)
+          if (subAccounts.isNotEmpty) {
+            // Nếu chỉ có 1 nhân viên, lưu dạng Map (giống sale_orders)
+            // Nếu có nhiều nhân viên, lưu dạng List
+            if (subAccounts.length == 1) {
+              final account = subAccounts.first;
+              snapshotData['sub_accounts'] = {
+                'id': account['id'],
+                'username': account['username'],
+                'doanhso': account['doanhso'] ?? 0,
+              };
+              print('📸 Snapshot: Saved sub_account doanhso: ${account['doanhso']} for salesman: ${account['username']}');
+            } else {
+              // Nhiều nhân viên, lưu dạng List
+              snapshotData['sub_accounts'] = subAccounts.map((account) => <String, dynamic>{
+                'id': account['id'],
+                'username': account['username'],
+                'doanhso': account['doanhso'] ?? 0,
+              }).toList();
+              print('📸 Snapshot: Saved ${subAccounts.length} sub_accounts doanhso');
+            }
+          }
+        } catch (e) {
+          print('⚠️ WARNING: Failed to fetch sub_accounts for snapshot: $e');
+          // Không throw error, tiếp tục tạo snapshot
+        }
+      }
 
       return snapshotData;
     } catch (e) {

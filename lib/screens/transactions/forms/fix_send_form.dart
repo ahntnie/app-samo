@@ -6,7 +6,6 @@ import 'fix_send_summary.dart';
 import 'dart:math' as math;
 import 'package:flutter/services.dart';
 import '../../text_scanner_screen.dart';
-import '../../../helpers/error_handler.dart';
 import '../../../helpers/cache_helper.dart';
 
 // Cache utility class
@@ -86,7 +85,7 @@ class _FixSendFormState extends State<FixSendForm> {
   String? note;
   List<Map<String, dynamic>> ticketItems = [];
 
-  List<String> fixers = [];
+  List<Map<String, dynamic>> fixers = [];
   Map<String, String> fixerIdMap = {}; // Map name to id for fixers
   List<String> imeiSuggestions = [];
   Map<String, String> productMap = {};
@@ -133,22 +132,28 @@ class _FixSendFormState extends State<FixSendForm> {
       final supabase = widget.tenantClient;
 
       final fixerResponse = await retry(
-        () => supabase.from('fix_units').select('id, name'),
+        () => supabase.from('fix_units').select('id, name, phone'),
         operation: 'Fetch fixers',
       );
       final fixerList = fixerResponse
-          .map((e) => e['name'] as String?)
-          .whereType<String>()
+          .map((e) {
+            final id = e['id']?.toString();
+            final name = e['name'] as String?;
+            final phone = e['phone'] as String? ?? '';
+            if (id != null && name != null) {
+              return {'id': id, 'name': name, 'phone': phone};
+            }
+            return null;
+          })
+          .whereType<Map<String, dynamic>>()
           .toList()
-        ..sort();
+        ..sort((a, b) => (a['name'] as String).compareTo(b['name'] as String));
       
       // Build id map for fixers
-      for (var e in fixerResponse) {
-        final name = e['name'] as String?;
-        final id = e['id']?.toString();
-        if (name != null && id != null) {
+      for (var e in fixerList) {
+        final name = e['name'] as String;
+        final id = e['id'] as String;
           fixerIdMap[name] = id;
-        }
       }
 
       final productResponse = await retry(
@@ -325,9 +330,10 @@ class _FixSendFormState extends State<FixSendForm> {
                 
                 if (mounted) {
                   setState(() {
-                    fixers.add(name);
-                    fixers.sort();
-                    fixer = name;
+                    fixers.add({'id': newFixerId, 'name': newFixerName, 'phone': phone});
+                    fixers.sort((a, b) => (a['name'] as String).compareTo(b['name'] as String));
+                    fixerIdMap[newFixerName] = newFixerId;
+                    fixer = newFixerName;
                   });
                   Navigator.pop(context);
                 }
@@ -599,8 +605,7 @@ class _FixSendFormState extends State<FixSendForm> {
       final imeiListFromDb = response
           .map((e) => e['imei'] as String?)
           .whereType<String>()
-          .where((imei) => imei != null && imei.trim().isNotEmpty && !imeiList.contains(imei))
-          .cast<String>()
+          .where((imei) => imei.trim().isNotEmpty && !imeiList.contains(imei))
           .take(quantity)  // ✅ FIX: Chỉ lấy đúng số lượng sau khi lọc
           .toList();
 
@@ -1118,39 +1123,64 @@ class _FixSendFormState extends State<FixSendForm> {
               children: [
                 Expanded(
                   child: wrapField(
-                    Autocomplete<String>(
+                    Autocomplete<Map<String, dynamic>>(
                       optionsBuilder: (TextEditingValue textEditingValue) {
                         final query = textEditingValue.text.toLowerCase();
                         if (query.isEmpty) return fixers.take(10).toList();
                         final filtered = fixers
-                            .where((option) => option.toLowerCase().contains(query))
+                            .where((option) {
+                              final name = (option['name'] as String).toLowerCase();
+                              final phone = (option['phone'] as String? ?? '').toLowerCase();
+                              return name.contains(query) || phone.contains(query);
+                            })
                             .toList()
                           ..sort((a, b) {
-                            final aLower = a.toLowerCase();
-                            final bLower = b.toLowerCase();
-                            final aStartsWith = aLower.startsWith(query);
-                            final bStartsWith = bLower.startsWith(query);
+                            final aName = (a['name'] as String).toLowerCase();
+                            final bName = (b['name'] as String).toLowerCase();
+                            // Ưu tiên khớp theo tên trước
+                            final aNameMatch = aName.contains(query);
+                            final bNameMatch = bName.contains(query);
+                            if (aNameMatch != bNameMatch) {
+                              return aNameMatch ? -1 : 1;
+                            }
+                            // Nếu đều khớp theo phone, ưu tiên tên
+                            if (!aNameMatch && !bNameMatch) {
+                              return aName.compareTo(bName);
+                            }
+                            final aStartsWith = aName.startsWith(query);
+                            final bStartsWith = bName.startsWith(query);
                             if (aStartsWith != bStartsWith) {
                               return aStartsWith ? -1 : 1;
                             }
-                            return aLower.compareTo(bLower);
+                            return aName.compareTo(bName);
                           });
-                        return filtered.isNotEmpty ? filtered.take(10).toList() : ['Không tìm thấy đơn vị sửa'];
+                        return filtered.isNotEmpty ? filtered.take(10).toList() : [{'id': '', 'name': 'Không tìm thấy đơn vị sửa', 'phone': ''}];
                       },
-                      onSelected: (String selection) {
-                        if (selection == 'Không tìm thấy đơn vị sửa') return;
+                      displayStringForOption: (option) {
+                        final name = option['name'] as String;
+                        final phone = option['phone'] as String? ?? '';
+                        if (phone.isNotEmpty) {
+                          return '$name - $phone';
+                        }
+                        return name;
+                      },
+                      onSelected: (Map<String, dynamic> selection) {
+                        if (selection['id'] == '' || selection['id'] == null) return;
                         setState(() {
-                          fixer = selection;
-                          fixerId = fixerIdMap[selection];
+                          fixer = selection['name'] as String;
+                          fixerId = selection['id'] as String;
                         });
+                        FocusScope.of(context).unfocus();
                       },
                       fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
+                        controller.text = fixer ?? '';
                         return TextField(
                           controller: controller,
                           focusNode: focusNode,
                           onChanged: (value) {
                             setState(() {
                               fixer = value.isNotEmpty ? value : null;
+                              fixerId = null; // Reset ID khi user tự nhập
                             });
                           },
                           decoration: const InputDecoration(

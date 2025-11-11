@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
+import 'dart:developer' as developer;
 import '../../notification_service.dart';
 import 'sale_form.dart';
 import 'dart:math' as math;
@@ -199,8 +200,35 @@ class _SaleSummaryState extends State<SaleSummary> {
           'currency': item['currency'],
           'account': account,
           'note': item['note'],
+          'doanhso': item['doanhso'] ?? 0,
         };
       }).toList();
+
+      // ✅ Lưu snapshot của sub_accounts.doanhso TRƯỚC KHI cộng thêm doanhso mới
+      if (widget.salesman.isNotEmpty) {
+        try {
+          final salesmanAccount = await retry(
+            () => supabase
+                .from('sub_accounts')
+                .select('id, username, doanhso')
+                .eq('username', widget.salesman)
+                .maybeSingle(),
+            operation: 'Fetch sub_account for snapshot',
+          );
+          
+          if (salesmanAccount != null) {
+            snapshotData['sub_accounts'] = {
+              'id': salesmanAccount['id'],
+              'username': salesmanAccount['username'],
+              'doanhso': salesmanAccount['doanhso'] ?? 0,
+            };
+            developer.log('📸 Snapshot: Saved sub_account doanhso: ${salesmanAccount['doanhso']} for salesman: ${widget.salesman}');
+          }
+        } catch (e) {
+          developer.log('⚠️ WARNING: Failed to fetch sub_account for snapshot: $e');
+          // Không throw error, tiếp tục tạo snapshot
+        }
+      }
 
       return snapshotData;
     } catch (e) {
@@ -687,6 +715,10 @@ class _SaleSummaryState extends State<SaleSummary> {
           totalProfit += (salePriceInVND - costPrice);
         }
         
+        // Tính doanh số: nhân doanh số mỗi sản phẩm với số lượng
+        final doanhsoPerProduct = (item['doanhso'] as num?)?.toDouble() ?? 0;
+        final totalDoanhsoForItem = doanhsoPerProduct * imeiCount;
+        
         saleOrdersList.add({
           'customer_id': widget.customerId,
           'customer': widget.customerName,
@@ -706,6 +738,7 @@ class _SaleSummaryState extends State<SaleSummary> {
           'customer_price': account == 'Ship COD' ? depositValue : null,
           'transporter_price': account == 'Ship COD' ? codAmount : null,
           'transporter': account == 'Ship COD' ? transporter : null,
+          'doanhso': totalDoanhsoForItem, // Lưu tổng doanh số (đã nhân với số lượng)
         });
       }
 
@@ -807,11 +840,118 @@ class _SaleSummaryState extends State<SaleSummary> {
 
       print('✅ Sale transaction completed successfully: ${result['ticket_id']}');
 
+      // Wait a bit to ensure RPC transaction is fully committed
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      // Update sub_accounts doanhso
+      if (widget.salesman.isNotEmpty) {
+        try {
+          // Calculate total doanhso from all items (nhân với số lượng mỗi item)
+          double totalDoanhso = 0;
+          for (var item in widget.ticketItems) {
+            final doanhsoPerProduct = (item['doanhso'] as num?)?.toDouble() ?? 0;
+            // Đếm số lượng IMEI trong item này
+            final imeiList = (item['imei'] as String).split(',').where((e) => e.trim().isNotEmpty).toList();
+            final quantity = imeiList.length;
+            // Nhân doanh số mỗi sản phẩm với số lượng
+            final itemDoanhso = doanhsoPerProduct * quantity;
+            totalDoanhso += itemDoanhso;
+            developer.log('📊 Item doanhso: $doanhsoPerProduct × $quantity = $itemDoanhso');
+          }
+          
+          developer.log('📊 Total doanhso for salesman ${widget.salesman}: $totalDoanhso');
+          
+          // Update sub_accounts doanhso
+          if (totalDoanhso > 0) {
+            try {
+              developer.log('🔍 Fetching current doanhso for username: ${widget.salesman}');
+              final currentAccount = await retry(
+                () => supabase
+                    .from('sub_accounts')
+                    .select('id, username, doanhso')
+                    .eq('username', widget.salesman)
+                    .maybeSingle(),
+                operation: 'Get current doanhso',
+              );
+              
+              if (currentAccount == null) {
+                developer.log('❌ ERROR: sub_account not found for username: ${widget.salesman}');
+                print('❌ ERROR: sub_account not found for username: ${widget.salesman}');
+              } else {
+                // Parse current doanhso - có thể là int hoặc double từ DB
+                final currentDoanhsoRaw = currentAccount['doanhso'];
+                final currentDoanhso = currentDoanhsoRaw is int 
+                    ? currentDoanhsoRaw.toDouble()
+                    : double.tryParse(currentDoanhsoRaw?.toString() ?? '0') ?? 0;
+                
+                final newDoanhsoDouble = currentDoanhso + totalDoanhso;
+                // Convert to int vì cột doanhso trong sub_accounts là INTEGER
+                final newDoanhso = newDoanhsoDouble.round();
+                
+                developer.log('💰 Current doanhso: $currentDoanhso, Adding: $totalDoanhso, New total: $newDoanhso (int: $newDoanhso)');
+                
+                await retry(
+                  () => supabase
+                      .from('sub_accounts')
+                      .update({'doanhso': newDoanhso}) // Gửi int thay vì double
+                      .eq('username', widget.salesman),
+                  operation: 'Update sub_accounts doanhso',
+                );
+                
+                // Verify update succeeded
+                await Future.delayed(const Duration(milliseconds: 200)); // Đợi một chút để đảm bảo update commit
+                final verifyAccount = await supabase
+                    .from('sub_accounts')
+                    .select('doanhso')
+                    .eq('username', widget.salesman)
+                    .maybeSingle();
+                
+                if (verifyAccount != null) {
+                  final verifyDoanhso = int.tryParse(verifyAccount['doanhso']?.toString() ?? '0') ?? 0;
+                  if (verifyDoanhso == newDoanhso) {
+                    developer.log('✅ Verified: Updated doanhso for salesman ${widget.salesman}: $currentDoanhso + $totalDoanhso = $newDoanhso');
+                    print('✅ Verified: Updated doanhso for salesman ${widget.salesman}: $currentDoanhso + $totalDoanhso = $newDoanhso');
+                  } else {
+                    developer.log('❌ WARNING: Update verification failed. Expected: $newDoanhso, Got: $verifyDoanhso');
+                    print('❌ WARNING: Update verification failed. Expected: $newDoanhso, Got: $verifyDoanhso');
+                  }
+                } else {
+                  developer.log('❌ ERROR: Could not verify update - account not found after update');
+                  print('❌ ERROR: Could not verify update - account not found after update');
+                }
+              }
+            } catch (e, stackTrace) {
+              developer.log('❌ ERROR: Failed to fetch/update sub_accounts doanhso: $e');
+              developer.log('❌ Stack trace: $stackTrace');
+              print('❌ ERROR: Failed to fetch/update sub_accounts doanhso: $e');
+              print('❌ Stack trace: $stackTrace');
+            }
+          } else {
+            developer.log('ℹ️ Skipping doanhso update: totalDoanhso = 0');
+          }
+        } catch (e, stackTrace) {
+          developer.log('❌ ERROR: Failed to calculate/update doanhso: $e');
+          developer.log('❌ Stack trace: $stackTrace');
+          print('❌ ERROR: Failed to calculate/update doanhso: $e');
+          print('❌ Stack trace: $stackTrace');
+          // Don't fail the transaction if doanhso update fails
+        }
+      } else {
+        developer.log('⚠️ Skipping doanhso update: salesman is empty');
+      }
+
       await NotificationService.showNotification(
         138,
         "Phiếu Bán Hàng Đã Tạo",
         "Đã bán hàng \"$firstProductName\" số lượng ${formatNumberLocal(totalImeiCount)} chiếc",
         'sale_created',
+      );
+      
+      // ✅ Gửi thông báo push đến tất cả thiết bị
+      await NotificationService.sendNotificationToAll(
+        "Phiếu Bán Hàng Đã Tạo",
+        "Đã bán hàng \"$firstProductName\" số lượng ${formatNumberLocal(totalImeiCount)} chiếc",
+        data: {'type': 'sale_created'},
       );
 
       if (mounted) {
@@ -983,6 +1123,7 @@ class _SaleSummaryState extends State<SaleSummary> {
                                                   initialImei: item['imei'] as String,
                                                   initialNote: item['note'] as String?,
                                                   initialSalesman: widget.salesman,
+                                                  initialDoanhso: (item['doanhso'] ?? 0).toString(),
                                                   ticketItems: widget.ticketItems,
                                                   editIndex: index,
                                                 ),

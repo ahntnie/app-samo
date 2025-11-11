@@ -678,6 +678,13 @@ class _FixReceiveSummaryState extends State<FixReceiveSummary> {
         'Đã tạo phiếu nhận hàng sửa về kho',
         'fix_receive_created',
       );
+      
+      // ✅ Gửi thông báo push đến tất cả thiết bị
+      await NotificationService.sendNotificationToAll(
+        'Phiếu Nhận Hàng Đã Tạo',
+        'Đã tạo phiếu nhận hàng sửa về kho',
+        data: {'type': 'fix_receive_created'},
+      );
 
       if (mounted) {
         setState(() {

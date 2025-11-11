@@ -603,16 +603,8 @@ class _TransferGlobalFormState extends State<TransferGlobalForm> {
   // Show confirmation dialog
   void showConfirmDialog() {
     if (isSubmitting) return;
-    
-    // Set isSubmitting ngay để ngăn double-submit
-    setState(() {
-      isSubmitting = true;
-    });
 
     if (transporter == null || productId == null || imeiList.isEmpty) {
-      setState(() {
-        isSubmitting = false;
-      });
       showDialog(
         context: context,
         builder: (context) => AlertDialog(
@@ -630,9 +622,6 @@ class _TransferGlobalFormState extends State<TransferGlobalForm> {
     }
 
     if (imeiList.length > maxImeiQuantity) {
-      setState(() {
-        isSubmitting = false;
-      });
       showDialog(
         context: context,
         builder: (context) => AlertDialog(
@@ -672,7 +661,7 @@ class _TransferGlobalFormState extends State<TransferGlobalForm> {
             child: const Text('Sửa lại'),
           ),
           ElevatedButton(
-            onPressed: isSubmitting ? null : () async {
+            onPressed: () async {
               Navigator.pop(dialogContext);
               await saveTransfer(imeiList);
             },
@@ -742,6 +731,13 @@ class _TransferGlobalFormState extends State<TransferGlobalForm> {
         "Đã tạo phiếu vận chuyển quốc tế",
         "Đã tạo phiếu vận chuyển quốc tế sản phẩm ${CacheUtil.getProductName(productId)} số lượng ${formatNumberLocal(imeiList.length)}",
         'transfer_global_created',
+      );
+      
+      // ✅ Gửi thông báo push đến tất cả thiết bị
+      await NotificationService.sendNotificationToAll(
+        "Đã tạo phiếu vận chuyển quốc tế",
+        "Đã tạo phiếu vận chuyển quốc tế sản phẩm ${CacheUtil.getProductName(productId)} số lượng ${formatNumberLocal(imeiList.length)}",
+        data: {'type': 'transfer_global_created'},
       );
 
       if (mounted) {
@@ -1398,6 +1394,13 @@ class _TransferGlobalFormState extends State<TransferGlobalForm> {
           'Phiếu Chuyển Kho Quốc Tế Đã Tạo',
           'Đã chuyển ${imeiList.length} sản phẩm ${CacheUtil.getProductName(productId)} cho ${transporter}',
           'transfer_global_created',
+        );
+        
+        // ✅ Gửi thông báo push đến tất cả thiết bị
+        await NotificationService.sendNotificationToAll(
+          'Phiếu Chuyển Kho Quốc Tế Đã Tạo',
+          'Đã chuyển ${imeiList.length} sản phẩm ${CacheUtil.getProductName(productId)} cho ${transporter}',
+          data: {'type': 'transfer_global_created'},
         );
 
         if (mounted) {

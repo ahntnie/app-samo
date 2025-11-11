@@ -1,4 +1,4 @@
-             class NotificationService {
+class NotificationService {
   static Future<void> showNotification(
     int id,
     String title,
@@ -8,4 +8,4 @@
     // TODO: Implement actual notification logic
     print('Notification: $title - $body');
   }
-} 
+}

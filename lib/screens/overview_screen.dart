@@ -51,6 +51,7 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
   double totalFixerDebt = 0;
   double totalTransporterDebt = 0;
   double totalInventoryCost = 0;
+  double totalEmployeeCommission = 0; // Hoa hồng nhân viên = tổng doanhso từ sub_accounts
   int soldProductsCount = 0;
   List<Map<String, dynamic>> accounts = [];
   Map<String, Map<String, int>> stockData = {};
@@ -414,6 +415,18 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
         totalTransporterDebtValue += debt;
       }
 
+      // ✅ Tính hoa hồng nhân viên = tổng doanhso từ bảng sub_accounts
+      double totalEmployeeCommissionValue = 0;
+      try {
+        final subAccounts = await widget.tenantClient.from('sub_accounts').select('doanhso');
+        for (final account in subAccounts) {
+          final doanhso = (account['doanhso'] as num?)?.toInt() ?? 0;
+          totalEmployeeCommissionValue += doanhso.toDouble();
+        }
+      } catch (e) {
+        print('Error fetching employee commission: $e');
+      }
+
       final timePoints = getTimePoints();
       timeLabels = timePoints.map((point) {
         if (_selectedTimeFilter == 'Hôm nay') {
@@ -552,6 +565,7 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
         totalFixerDebt = totalFixerDebtValue;
         totalTransporterDebt = totalTransporterDebtValue;
         totalInventoryCost = totalInventoryCostValue;
+        totalEmployeeCommission = totalEmployeeCommissionValue;
         soldProductsCount = soldCount;
         stockData = stock;
 
@@ -560,10 +574,12 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
         incomeSpots = List.generate(timeLabels.length, (i) => FlSpot(i.toDouble(), incomeMap[i] ?? 0));
         expenseSpots = List.generate(timeLabels.length, (i) => FlSpot(i.toDouble(), expenseMap[i] ?? 0));
 
-        companyValue = totalAccountBalance +
+        // ✅ Giá trị công ty mới = giá trị công ty hiện tại - hoa hồng nhân viên
+        final baseCompanyValue = totalAccountBalance +
             totalInventoryCost +
             totalCustomerDebt -
             (totalSupplierDebt + totalFixerDebt + totalTransporterDebt);
+        companyValue = baseCompanyValue - totalEmployeeCommissionValue;
 
         if (selectedStatus != null && !stockData.containsKey(selectedStatus)) {
           selectedStatus = null;
@@ -884,6 +900,8 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
           ),
           if (widget.permissions.contains('view_company_value'))
             _buildHeaderTile('Giá trị công ty', '${formatMoney(companyValue)} VND', Colors.purple),
+          if (widget.permissions.contains('view_company_value'))
+            _buildHeaderTile('Hoa hồng nhân viên', '${formatMoney(totalEmployeeCommission)} VND', Colors.teal),
           _buildHeaderTile('Doanh số', '$soldProductsCount sp / ${formatMoney(revenue)} VND', Colors.green),
           if (widget.permissions.contains('view_profit'))
             _buildHeaderTile('Lợi nhuận', '${formatMoney(profit)} VND', Colors.orange),

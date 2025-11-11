@@ -473,6 +473,13 @@ class _ReceiveFormState extends State<ReceiveForm> {
                       "Đã tạo phiếu thu tiền cho $partnerName với số tiền ${formatNumberLocal(amount!)} $currency",
                       'receive_created',
                     );
+                    
+                    // ✅ Gửi thông báo push đến tất cả thiết bị
+                    await NotificationService.sendNotificationToAll(
+                      "Phiếu Thu Tiền Đã Tạo",
+                      "Đã tạo phiếu thu tiền cho $partnerName với số tiền ${formatNumberLocal(amount!)} $currency",
+                      data: {'type': 'receive_created'},
+                    );
 
                     if ((partnerType == 'Khách hàng' || partnerType == 'Nhà cung cấp' || partnerType == 'Đơn vị fix lỗi') && partnerId != null) {
                       await widget.tenantClient

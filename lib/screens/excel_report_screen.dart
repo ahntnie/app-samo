@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide Border, BorderStyle;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:excel/excel.dart';
 import 'package:file_picker/file_picker.dart';
@@ -6,7 +6,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:share_plus/share_plus.dart';
 import 'dart:io';
-import 'package:device_info_plus/device_info_plus.dart';
+import '../helpers/storage_helper.dart';
+import '../helpers/excel_style_helper.dart';
 
 class ExcelReportScreen extends StatefulWidget {
   final List<String> permissions;
@@ -31,22 +32,18 @@ class _ExcelReportScreenState extends State<ExcelReportScreen> {
     _loadReportFiles();
   }
 
-  Future<Directory> _getDownloadDirectory() async {
-    Directory directory;
-    if (Platform.isAndroid) {
-      directory = Directory('/storage/emulated/0/Download');
-      if (!await directory.exists()) {
-        await directory.create(recursive: true);
-      }
-    } else {
-      directory = await getApplicationDocumentsDirectory();
-    }
-    return directory;
+  Future<Directory?> _getDownloadDirectory() async {
+    // Sử dụng StorageHelper để lấy thư mục Downloads (hỗ trợ Android 13+)
+    return await StorageHelper.getDownloadDirectory();
   }
 
   Future<void> _loadReportFiles() async {
     try {
       final downloadsDir = await _getDownloadDirectory();
+      if (downloadsDir == null) {
+        print('⚠️ Cannot access download directory');
+        return;
+      }
       final files = downloadsDir.listSync();
       setState(() {
         reportFiles = files
@@ -115,70 +112,18 @@ class _ExcelReportScreenState extends State<ExcelReportScreen> {
   }
 
   Future<bool> _requestStoragePermission() async {
-    if (Platform.isAndroid) {
-      final deviceInfo = DeviceInfoPlugin();
-      final androidInfo = await deviceInfo.androidInfo;
-      final sdkInt = androidInfo.version.sdkInt;
-
-      if (sdkInt < 30) {
-        var status = await Permission.storage.status;
-        if (!status.isGranted) {
-          status = await Permission.storage.request();
-          if (!status.isGranted) {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text(
-                      'Cần cấp quyền truy cập bộ nhớ để lưu hoặc đọc file. Vui lòng cấp quyền trong cài đặt.'),
-                ),
-              );
-              await openAppSettings();
-            }
-            return false;
-          }
-        }
-        return true;
-      } else {
-        if (sdkInt >= 30) {
-          var status = await Permission.manageExternalStorage.status;
-          if (!status.isGranted) {
-            status = await Permission.manageExternalStorage.request();
-            if (!status.isGranted) {
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text(
-                        'Cần cấp quyền truy cập bộ nhớ để lưu và đọc file. Vui lòng cấp quyền "Truy cập tất cả file" trong cài đặt.'),
-                  ),
-                );
-                await openAppSettings();
-              }
-              return false;
-            }
-          }
-          return true;
-        } else {
-          var status = await Permission.storage.status;
-          if (!status.isGranted) {
-            status = await Permission.storage.request();
-            if (!status.isGranted) {
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text(
-                        'Cần cấp quyền truy cập bộ nhớ để lưu hoặc đọc file. Vui lòng cấp quyền trong cài đặt.'),
-                  ),
-                );
-                await openAppSettings();
-              }
-              return false;
-            }
-          }
-          return true;
-        }
-      }
+    // Sử dụng StorageHelper để xử lý permission cho Android 13+
+    final hasPermission = await StorageHelper.requestStoragePermissionIfNeeded();
+    if (!hasPermission && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+              'Cần cấp quyền truy cập bộ nhớ để lưu hoặc đọc file. Vui lòng cấp quyền trong cài đặt.'),
+        ),
+      );
+      await openAppSettings();
     }
-    return true;
+    return hasPermission;
   }
 
   String getExcelColumnName(int colIndex) {
@@ -196,6 +141,26 @@ class _ExcelReportScreenState extends State<ExcelReportScreen> {
     final columnTranslations = params['columnTranslations'] as Map<String, Map<String, String>>;
     final tableData = params['tableData'] as Map<String, List<Map<String, dynamic>>>;
     final tenantClient = params['tenantClient'] as SupabaseClient;
+  String _formatImeiForExcelCell(dynamic imeiData) {
+    if (imeiData == null) {
+      return '';
+    }
+    final raw = imeiData.toString().trim();
+    if (raw.isEmpty) {
+      return '';
+    }
+    final normalized = raw.replaceAll('\r', '');
+    final segments = normalized
+        .split(RegExp(r'[,;\n]+'))
+        .map((segment) => segment.trim())
+        .where((segment) => segment.isNotEmpty)
+        .toList();
+    if (segments.isEmpty) {
+      return '';
+    }
+    return segments.join('\r\n');
+  }
+
 
     // Lấy ánh xạ product_id -> name từ bảng products_name
     final productResponse = await tenantClient.from('products_name').select('id, products');
@@ -246,6 +211,7 @@ class _ExcelReportScreenState extends State<ExcelReportScreen> {
       'cost',
       'customer_price',
       'transporter_price',
+    'doanhso',
       'debt',
     ];
 
@@ -258,16 +224,34 @@ class _ExcelReportScreenState extends State<ExcelReportScreen> {
       final headerColumns = columnTranslations[tableName]!.keys.toList();
       final dataColumns = columnTranslations[tableName]!.values.toList();
 
-      for (var i = 0; i < headerColumns.length; i++) {
-        final columnLetter = getExcelColumnName(i);
-        sheet
-            .cell(CellIndex.indexByString("${columnLetter}1"))
-            .value = TextCellValue(headerColumns[i]);
+      final columnCount = headerColumns.length;
+      final sizingTracker = ExcelSizingTracker(columnCount);
+      final styles = ExcelCellStyles.build();
+      final headerLabels = List<String>.from(headerColumns);
+
+      for (var i = 0; i < columnCount; i++) {
+        final cell = sheet.cell(
+          CellIndex.indexByColumnRow(columnIndex: i, rowIndex: 0),
+        );
+        cell.value = TextCellValue(headerLabels[i]);
+        cell.cellStyle = styles.header;
+        sizingTracker.update(0, i, headerLabels[i]);
       }
 
+      const multilineHeaders = {
+        'Ghi chú',
+        'Địa chỉ',
+        'Ghi chú khách hàng',
+        'Ghi chú đơn vị vận chuyển',
+        'Ghi chú nhà cung cấp',
+        'IMEI',
+      };
+
       if (data.isNotEmpty) {
+        var currentRowIndex = 1;
         for (var rowIndex = 0; rowIndex < data.length; rowIndex++) {
           final row = data[rowIndex];
+          final rowValues = <String>[];
           for (var colIndex = 0; colIndex < dataColumns.length; colIndex++) {
             final columnName = dataColumns[colIndex];
             final cellValueRaw = row[columnName];
@@ -279,6 +263,8 @@ class _ExcelReportScreenState extends State<ExcelReportScreen> {
             } else if (columnName == 'warehouse_name') {
               final warehouseId = row['warehouse_id']?.toString();
               cellValueString = warehouseId != null ? warehouseIdToName[warehouseId] ?? '' : '';
+            } else if (columnName == 'imei') {
+              cellValueString = _formatImeiForExcelCell(cellValueRaw);
             } else if (numericColumns.contains(columnName)) {
               if (cellValueRaw != null) {
                 final doubleValue = double.tryParse(cellValueRaw.toString());
@@ -289,14 +275,28 @@ class _ExcelReportScreenState extends State<ExcelReportScreen> {
             } else {
               cellValueString = cellValueRaw?.toString() ?? '';
             }
-
-            final columnLetter = getExcelColumnName(colIndex);
-            sheet
-                .cell(CellIndex.indexByString("${columnLetter}${rowIndex + 2}"))
-                .value = TextCellValue(cellValueString);
+            rowValues.add(cellValueString);
           }
+
+          for (var colIndex = 0; colIndex < columnCount; colIndex++) {
+            final cell = sheet.cell(
+              CellIndex.indexByColumnRow(
+                columnIndex: colIndex,
+                rowIndex: currentRowIndex,
+              ),
+            );
+            final value = rowValues[colIndex];
+            final headerLabel = headerLabels[colIndex];
+            final isMultiline = multilineHeaders.contains(headerLabel);
+            cell.value = TextCellValue(value);
+            cell.cellStyle = isMultiline ? styles.multiline : styles.centered;
+            sizingTracker.update(currentRowIndex, colIndex, value);
+          }
+          currentRowIndex++;
         }
       }
+
+      sizingTracker.applyToSheet(sheet);
     }
 
     if (excel.sheets.containsKey('Sheet1')) {
@@ -542,6 +542,7 @@ class _ExcelReportScreenState extends State<ExcelReportScreen> {
           'ID': 'id',
           'Ticket ID': 'ticket_id',
           'Nhân viên bán': 'saleman',
+          'Doanh số': 'doanhso',
           'Khách hàng': 'customer',
           'Sản phẩm': 'product_name',
           'ID Sản phẩm': 'product_id',
@@ -635,6 +636,9 @@ class _ExcelReportScreenState extends State<ExcelReportScreen> {
       print('Excel file created, saving to local storage: $fileName');
 
       final downloadsDir = await _getDownloadDirectory();
+      if (downloadsDir == null) {
+        throw Exception('Không thể truy cập thư mục Downloads');
+      }
       final localFilePath = '${downloadsDir.path}/$fileName';
       final localFile = File(localFilePath);
       await localFile.writeAsBytes(excelBytes);
@@ -967,6 +971,7 @@ class _ExcelReportScreenState extends State<ExcelReportScreen> {
           'ID': 'id',
           'Ticket ID': 'ticket_id',
           'Nhân viên bán': 'saleman',
+          'Doanh số': 'doanhso',
           'Khách hàng': 'customer',
           'Sản phẩm': 'product_name',
           'ID Sản phẩm': 'product_id',
@@ -1098,6 +1103,7 @@ class _ExcelReportScreenState extends State<ExcelReportScreen> {
         'transporter_price',
         'cost',
         'transport_fee',
+        'doanhso',
       ];
 
       final numericColumns = [
@@ -1184,7 +1190,13 @@ class _ExcelReportScreenState extends State<ExcelReportScreen> {
             } else if (timestampColumns.contains(columnName)) {
               rowData[columnName] = cellValueString;
             } else if (columnName == 'imei') {
-              rowData[columnName] = cellValueString;
+            final normalized = cellValueString.replaceAll('\r', '\n');
+            final imeis = normalized
+                .split(RegExp(r'[\n,;]+'))
+                .map((segment) => segment.trim())
+                .where((segment) => segment.isNotEmpty)
+                .toList();
+            rowData[columnName] = imeis.isEmpty ? null : imeis.join(', ');
             } else if (uuidColumns.contains(columnName)) {
               // Xử lý UUID columns - giữ nguyên dạng string
               rowData[columnName] = cellValueString;

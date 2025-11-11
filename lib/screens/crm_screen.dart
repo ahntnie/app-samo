@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
-import '../helpers/error_handler.dart';
 import '../helpers/cache_helper.dart';
 
 // Cache manager cho CRM
@@ -202,24 +201,11 @@ class _CRMScreenState extends State<CRMScreen> {
         return;
       }
 
-      final customerResponse = await widget.tenantClient
-          .from('customers')
-          .select('name, phone, note, birthday');
-
-      List<Map<String, dynamic>> customerList = customerResponse.map((customer) {
-        return {
-          'name': customer['name']?.toString() ?? '',
-          'phone': customer['phone']?.toString() ?? '',
-          'note': customer['note']?.toString() ?? '',
-          'birthday': customer['birthday']?.toString() ?? '',
-          'total_quantity': 0,
-          'latest_purchase': null,
-        };
-      }).toList();
-
+      // Query sale_orders trước để lấy tất cả khách hàng đã mua sản phẩm
+      // ✅ Sử dụng customer_id làm khóa chính thay vì tên khách hàng
       var saleQuery = widget.tenantClient
           .from('sale_orders')
-          .select('customer, product_id, quantity, created_at')
+          .select('customer_id, product_id, quantity, created_at')
           .eq('iscancelled', false);
 
       if (startDate != null) {
@@ -234,25 +220,115 @@ class _CRMScreenState extends State<CRMScreen> {
 
       final saleResponse = await saleQuery;
 
-      for (var order in saleResponse) {
-        final customerName = order['customer']?.toString();
-        final quantity = order['quantity'] as int? ?? 0;
-        final purchaseDate = order['created_at'] != null ? DateTime.parse(order['created_at']) : null;
+      // ✅ Nếu có productIdFilter, tạo customerList từ sale_orders trước
+      List<Map<String, dynamic>> customerList = [];
+      
+      if (productIdFilter != null && productIdFilter!.isNotEmpty) {
+        // ✅ Nhóm khách hàng từ sale_orders theo customer_id (khóa chính)
+        final Map<String, Map<String, dynamic>> customerMap = {};
+        
+        for (var order in saleResponse) {
+          final customerId = order['customer_id']?.toString();
+          final quantity = order['quantity'] as int? ?? 0;
+          final purchaseDate = order['created_at'] != null ? DateTime.parse(order['created_at']) : null;
 
-        if (customerName == null || purchaseDate == null) continue;
+          if (customerId == null || customerId.isEmpty || purchaseDate == null) continue;
 
-        final customerIndex = customerList.indexWhere((c) => c['name'] == customerName);
-        if (customerIndex != -1) {
-          customerList[customerIndex]['total_quantity'] += quantity;
-          if (customerList[customerIndex]['latest_purchase'] == null ||
-              purchaseDate.isAfter(customerList[customerIndex]['latest_purchase'])) {
-            customerList[customerIndex]['latest_purchase'] = purchaseDate;
+          if (!customerMap.containsKey(customerId)) {
+            customerMap[customerId] = {
+              'id': customerId,
+              'name': '',
+              'phone': '',
+              'note': '',
+              'birthday': '',
+              'total_quantity': 0,
+              'latest_purchase': purchaseDate,
+            };
+          }
+
+          customerMap[customerId]!['total_quantity'] = 
+              (customerMap[customerId]!['total_quantity'] as int) + quantity;
+          
+          final currentLatest = customerMap[customerId]!['latest_purchase'] as DateTime;
+          if (purchaseDate.isAfter(currentLatest)) {
+            customerMap[customerId]!['latest_purchase'] = purchaseDate;
           }
         }
-      }
 
-      if (productIdFilter != null && productIdFilter!.isNotEmpty) {
-        customerList = customerList.where((customer) => customer['total_quantity'] > 0).toList();
+        customerList = customerMap.values.toList();
+
+        // ✅ Bổ sung thông tin từ bảng customers bằng customer_id
+        if (customerList.isNotEmpty) {
+          final customerIds = customerList.map((c) => c['id'] as String).toList();
+          try {
+            final customerResponse = await widget.tenantClient
+                .from('customers')
+                .select('id, name, phone, note, birthday')
+                .inFilter('id', customerIds);
+
+            final customerInfoMap = <String, Map<String, dynamic>>{};
+            for (var customer in customerResponse) {
+              final id = customer['id']?.toString() ?? '';
+              if (id.isNotEmpty) {
+                customerInfoMap[id] = {
+                  'name': customer['name']?.toString() ?? '',
+                  'phone': customer['phone']?.toString() ?? '',
+                  'note': customer['note']?.toString() ?? '',
+                  'birthday': customer['birthday']?.toString() ?? '',
+                };
+              }
+            }
+
+            // Cập nhật thông tin cho từng khách hàng
+            for (var customer in customerList) {
+              final id = customer['id'] as String;
+              if (customerInfoMap.containsKey(id)) {
+                customer['name'] = customerInfoMap[id]!['name'];
+                customer['phone'] = customerInfoMap[id]!['phone'];
+                customer['note'] = customerInfoMap[id]!['note'];
+                customer['birthday'] = customerInfoMap[id]!['birthday'];
+              }
+            }
+          } catch (e) {
+            print('Error fetching customer details: $e');
+            // Tiếp tục với thông tin từ sale_orders nếu lỗi
+          }
+        }
+      } else {
+        // ✅ Không có productIdFilter, lấy từ bảng customers như cũ
+        final customerResponse = await widget.tenantClient
+            .from('customers')
+            .select('id, name, phone, note, birthday');
+
+        customerList = customerResponse.map((customer) {
+          return {
+            'id': customer['id']?.toString() ?? '',
+            'name': customer['name']?.toString() ?? '',
+            'phone': customer['phone']?.toString() ?? '',
+            'note': customer['note']?.toString() ?? '',
+            'birthday': customer['birthday']?.toString() ?? '',
+            'total_quantity': 0,
+            'latest_purchase': null,
+          };
+        }).toList();
+
+        // ✅ Cập nhật total_quantity từ sale_orders bằng customer_id
+        for (var order in saleResponse) {
+          final customerId = order['customer_id']?.toString();
+          final quantity = order['quantity'] as int? ?? 0;
+          final purchaseDate = order['created_at'] != null ? DateTime.parse(order['created_at']) : null;
+
+          if (customerId == null || purchaseDate == null) continue;
+
+          final customerIndex = customerList.indexWhere((c) => c['id'] == customerId);
+          if (customerIndex != -1) {
+            customerList[customerIndex]['total_quantity'] += quantity;
+            if (customerList[customerIndex]['latest_purchase'] == null ||
+                purchaseDate.isAfter(customerList[customerIndex]['latest_purchase'])) {
+              customerList[customerIndex]['latest_purchase'] = purchaseDate;
+            }
+          }
+        }
       }
 
       // Lưu vào cache nếu không có filter

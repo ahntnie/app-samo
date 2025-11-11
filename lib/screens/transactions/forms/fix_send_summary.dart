@@ -270,6 +270,13 @@ class _FixSendSummaryState extends State<FixSendSummary> {
         "Đã tạo phiếu gửi sửa với ${formatNumberLocal(widget.ticketItems.length)} mục",
         'fix_send_created',
       );
+      
+      // ✅ Gửi thông báo push đến tất cả thiết bị
+      await NotificationService.sendNotificationToAll(
+        "Phiếu Gửi Sửa Đã Tạo",
+        "Đã tạo phiếu gửi sửa với ${formatNumberLocal(widget.ticketItems.length)} mục",
+        data: {'type': 'fix_send_created'},
+      );
 
       if (mounted) {
         setState(() {

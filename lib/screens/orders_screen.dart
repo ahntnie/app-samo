@@ -812,6 +812,13 @@ class _OrdersScreenState extends State<OrdersScreen> with SingleTickerProviderSt
                   'Có đơn order mới cho sản phẩm "$productName" số lượng $quantity',
                   'order_created',
                 );
+                
+                // ✅ Gửi thông báo push đến tất cả thiết bị
+                await NotificationService.sendNotificationToAll(
+                  'Đơn Order Mới',
+                  'Có đơn order mới cho sản phẩm "$productName" số lượng $quantity',
+                  data: {'type': 'order_created'},
+                );
 
                 Navigator.pop(dialogContext);
                 

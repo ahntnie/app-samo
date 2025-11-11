@@ -1,11 +1,12 @@
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide Border, BorderStyle;
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:excel/excel.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:open_file/open_file.dart';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:developer' as developer;
+import '../helpers/storage_helper.dart';
 
 class HistoryScreen extends StatefulWidget {
   final List<String> permissions;
@@ -25,19 +26,19 @@ class _HistoryScreenState extends State<HistoryScreen> {
   final TextEditingController _dateToController = TextEditingController();
 
   final List<Map<String, String>> allTicketTypeOptions = [
-    {'value': 'all', 'display': 'Tất cả', 'permission': ''},
-    {'value': 'cost', 'display': 'Chi phí', 'permission': 'access_cost_form'},
-    {'value': 'payment', 'display': 'Chi Thanh Toán Đối Tác', 'permission': 'access_payment_form'},
-    {'value': 'exchange', 'display': 'Đổi Tiền', 'permission': 'access_exchange_form'},
-    {'value': 'income_other', 'display': 'Thu Nhập Khác', 'permission': 'access_income_other_form'},
-    {'value': 'receive', 'display': 'Thu Tiền Đối Tác', 'permission': 'access_receive_form'},
-    {'value': 'transfer_fund', 'display': 'Chuyển Quỹ', 'permission': 'access_transfer_fund_form'},
+    {'value': 'all', 'display': 'Loại Phiếu', 'permission': ''},
+    {'value': 'cost', 'display': 'Chi phí', 'permission': 'access_financial_account_form'},
+    {'value': 'payment', 'display': 'Chi Thanh Toán Đối Tác', 'permission': 'access_financial_account_form'},
+    {'value': 'exchange', 'display': 'Đổi Tiền', 'permission': 'access_financial_account_form'},
+    {'value': 'income_other', 'display': 'Thu Nhập Khác', 'permission': 'access_financial_account_form'},
+    {'value': 'receive', 'display': 'Thu Tiền Đối Tác', 'permission': 'access_financial_account_form'},
     {'value': 'fix_receive_orders', 'display': 'Nhận Hàng Sửa Xong', 'permission': 'access_fix_receive_form'},
     {'value': 'fix_send_orders', 'display': 'Gửi Sửa', 'permission': 'access_fix_send_form'},
     {'value': 'import_orders', 'display': 'Nhập Hàng', 'permission': 'access_import_form'},
     {'value': 'reimport_orders', 'display': 'Nhập Lại Hàng', 'permission': 'access_reimport_form'},
     {'value': 'chuyển kho quốc tế', 'display': 'Chuyển Kho Quốc Tế', 'permission': 'access_transfer_global_form'},
     {'value': 'chuyển kho nội địa', 'display': 'Chuyển Kho Nội Địa', 'permission': 'access_transfer_local_form'},
+    {'value': 'transfer_fund', 'display': 'Chuyển Quỹ', 'permission': 'access_transaction_form'},
     {'value': 'nhập kho vận chuyển', 'display': 'Nhập Kho Vận Chuyển', 'permission': 'access_transfer_receive_form'},
     {'value': 'sale_orders', 'display': 'Bán Hàng', 'permission': 'access_sale_form'},
     {'value': 'return_orders', 'display': 'Trả Hàng', 'permission': 'access_return_form'},
@@ -325,6 +326,71 @@ class _HistoryScreenState extends State<HistoryScreen> {
     }
   }
 
+  String _formatImeiForExcelCell(dynamic imeiData) {
+    if (imeiData == null) {
+      return 'N/A';
+    }
+    final raw = imeiData.toString().trim();
+    if (raw.isEmpty || raw == 'N/A') {
+      return 'N/A';
+    }
+    final normalized = raw.replaceAll('\r', '');
+    final entries = normalized
+        .split(RegExp(r'[,;\n]+'))
+        .map((value) => value.trim())
+        .where((value) => value.isNotEmpty)
+        .toList();
+    if (entries.isEmpty) {
+      return 'N/A';
+    }
+    return entries.join('\r\n');
+  }
+
+  void _updateExcelMetrics({
+    required Map<int, int> rowLineCounts,
+    required List<double> maxColumnWidths,
+    required int rowIndex,
+    required int columnIndex,
+    required String value,
+  }) {
+    final sanitized = value.replaceAll('\r\n', '\n');
+    final lines = sanitized.isEmpty ? <String>[''] : sanitized.split('\n');
+    final longestLineLength = lines.fold<int>(
+      0,
+      (currentMax, line) => math.max(currentMax, line.length),
+    );
+    maxColumnWidths[columnIndex] =
+        math.max(maxColumnWidths[columnIndex], longestLineLength.toDouble());
+    final currentRowLineCount = rowLineCounts[rowIndex] ?? 1;
+    rowLineCounts[rowIndex] = math.max(currentRowLineCount, lines.length);
+  }
+
+  void _applyExcelSizing({
+    required Sheet sheet,
+    required List<double> maxColumnWidths,
+    required Map<int, int> rowLineCounts,
+  }) {
+    final baseRowHeight = (sheet.defaultRowHeight ?? 15).toDouble();
+    final baseColumnWidth = (sheet.defaultColumnWidth ?? 8.43).toDouble();
+
+    for (int columnIndex = 0;
+        columnIndex < maxColumnWidths.length;
+        columnIndex++) {
+      final contentWidth = maxColumnWidths[columnIndex];
+      final computedWidth =
+          contentWidth > 0 ? contentWidth + 2 : baseColumnWidth;
+      sheet.setColumnWidth(
+        columnIndex,
+        math.max(baseColumnWidth, computedWidth),
+      );
+    }
+
+    rowLineCounts.forEach((rowIndex, lineCount) {
+      final effectiveLineCount = lineCount < 1 ? 1 : lineCount;
+      sheet.setRowHeight(rowIndex, baseRowHeight * effectiveLineCount);
+    });
+  }
+
   String _getPartnerName(String? partnerId, String? partnerType, String? partnerName) {
     // Nếu đã có partner_name thì dùng luôn
     if (partnerName != null && partnerName.isNotEmpty && partnerName != 'N/A') {
@@ -349,24 +415,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
       default:
         return 'N/A';
     }
-  }
-
-  String _filterPartnerName(String partnerName, String? table) {
-    // Kiểm tra quyền xem thông tin đối tác
-    // Nếu là khách hàng (customers, sale_orders, reimport_orders)
-    if (table == 'customers' || table == 'sale_orders' || table == 'reimport_orders') {
-      if (!widget.permissions.contains('view_customer')) {
-        return '[Bạn không có quyền xem thông tin khách hàng]';
-      }
-    }
-    // Nếu là nhà cung cấp (suppliers, import_orders, return_orders)
-    else if (table == 'suppliers' || table == 'import_orders' || table == 'return_orders') {
-      if (!widget.permissions.contains('view_supplier')) {
-        return '[Bạn không có quyền xem thông tin nhà cung cấp]';
-      }
-    }
-    
-    return partnerName; // Có quyền thì hiển thị bình thường
   }
 
 
@@ -412,15 +460,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
       return [];
     }
 
-    final hasAnyFinancialPermission = widget.permissions.contains('access_cost_form') ||
-        widget.permissions.contains('access_payment_form') ||
-        widget.permissions.contains('access_exchange_form') ||
-        widget.permissions.contains('access_income_other_form') ||
-        widget.permissions.contains('access_receive_form') ||
-        widget.permissions.contains('access_transfer_fund_form');
-
     final tables = [
-      if (hasAnyFinancialPermission)
+      if (widget.permissions.contains('access_financial_account_form'))
         {
           'table': 'financial_orders',
           'key': 'id',
@@ -444,7 +485,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         {
           'table': 'fix_send_orders',
           'key': 'ticket_id',
-          'select': 'ticket_id, created_at, fixer, fix_unit_id, quantity, iscancelled, product_id, warehouse_id, imei, note',
+          'select': 'ticket_id, created_at, fixer, fix_unit_id, quantity, iscancelled, product_id, warehouse_id, imei',
           'partnerField': 'fix_unit_id',
           'amountField': null,
           'dateField': 'created_at',
@@ -474,7 +515,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         {
           'table': 'sale_orders',
           'key': 'ticket_id',
-          'select': 'ticket_id, created_at, customer_id, price, quantity, currency, account, customer_price, transporter_price, transporter, iscancelled, product_id, warehouse_id, imei, saleman, note',
+          'select': 'ticket_id, created_at, customer_id, price, quantity, currency, account, customer_price, transporter_price, transporter, iscancelled, product_id, warehouse_id, imei, saleman, note, doanhso',
           'partnerField': 'customer_id',
           'amountField': 'price',
           'dateField': 'created_at',
@@ -484,7 +525,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         {
           'table': 'return_orders',
           'key': 'ticket_id',
-          'select': 'ticket_id, created_at, supplier_id, price, quantity, total_amount, currency, account, iscancelled, product_id, warehouse_id, imei, note',
+          'select': 'ticket_id, created_at, supplier_id, price, quantity, total_amount, currency, account, iscancelled, product_id, warehouse_id, imei',
           'partnerField': 'supplier_id',
           'amountField': 'price',
           'dateField': 'created_at',
@@ -511,7 +552,11 @@ class _HistoryScreenState extends State<HistoryScreen> {
         final dateField = table['dateField'] as String;
         final keyField = table['key'] as String;
 
-        dynamic query = widget.tenantClient.from(tableName).select(select);
+        // Thử SELECT với note, nếu lỗi thì SELECT lại không có note
+        List<dynamic> response;
+        String selectToUse = select;
+        try {
+          dynamic query = widget.tenantClient.from(tableName).select(selectToUse);
         query = query.eq('iscancelled', false);
         if (dateFrom != null) {
           query = query.gte(dateField, dateFrom!.toIso8601String());
@@ -521,7 +566,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
         }
         query = query.order(dateField, ascending: false);
 
-        List<dynamic> response;
         if (paginated && filterType == 'all' && dateFrom == null && dateTo == null) {
           final start = currentPage * pageSize;
           final end = start + pageSize - 1;
@@ -530,6 +574,32 @@ class _HistoryScreenState extends State<HistoryScreen> {
         } else {
           response = await query;
           developer.log('fetchTickets: Fetched ${response.length} from $tableName');
+          }
+        } catch (e) {
+          // Nếu lỗi (có thể do cột note không tồn tại), thử lại không có note
+          developer.log('fetchTickets: Error with note column for $tableName, retrying without note: $e');
+          // Loại bỏ note khỏi SELECT statement (xử lý các trường hợp: note ở đầu, giữa, cuối)
+          final selectParts = select.split(',').map((s) => s.trim()).where((s) => s != 'note').toList();
+          selectToUse = selectParts.join(', ');
+          dynamic query = widget.tenantClient.from(tableName).select(selectToUse);
+          query = query.eq('iscancelled', false);
+          if (dateFrom != null) {
+            query = query.gte(dateField, dateFrom!.toIso8601String());
+          }
+          if (dateTo != null) {
+            query = query.lte(dateField, dateTo!.toIso8601String());
+          }
+          query = query.order(dateField, ascending: false);
+
+          if (paginated && filterType == 'all' && dateFrom == null && dateTo == null) {
+            final start = currentPage * pageSize;
+            final end = start + pageSize - 1;
+            response = await query.range(start, end);
+            developer.log('fetchTickets: Fetched ${response.length} from $tableName without note (paginated)');
+          } else {
+            response = await query;
+            developer.log('fetchTickets: Fetched ${response.length} from $tableName without note');
+          }
         }
 
         final groupedTickets = <String, Map<String, dynamic>>{};
@@ -582,18 +652,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 tx['partner_type']?.toString(),
                 tx[partnerField]?.toString(),
               );
-              // Lọc theo quyền dựa vào partner_type
-              partnerName = _filterPartnerName(partnerName, tx['partner_type']?.toString());
             } else if (tableName == 'import_orders' || tableName == 'return_orders') {
               // Nhà cung cấp - dùng supplier_id
               final supplierId = tx[partnerField]?.toString();
               partnerName = supplierId != null ? (supplierMap[supplierId] ?? 'N/A') : 'N/A';
-              partnerName = _filterPartnerName(partnerName, tableName);
             } else if (tableName == 'sale_orders' || tableName == 'reimport_orders') {
               // Khách hàng - dùng customer_id
               final customerId = tx[partnerField]?.toString();
               partnerName = customerId != null ? (customerMap[customerId] ?? 'N/A') : 'N/A';
-              partnerName = _filterPartnerName(partnerName, tableName);
             } else if (tableName == 'fix_send_orders' || tableName == 'fix_receive_orders') {
               // Đơn vị fix - dùng fix_unit_id nếu có, nếu không dùng fixer (tên)
               final fixUnitId = tx['fix_unit_id']?.toString();
@@ -622,7 +688,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
               'product_name': productName,
               'warehouse_name': warehouseName,
               'imei': tableName == 'transporter_orders' || tableName == 'fix_send_orders' || tableName == 'fix_receive_orders' || tableName == 'sale_orders' || tableName == 'return_orders' || tableName == 'reimport_orders' || tableName == 'import_orders' ? '' : null,
-              'note': tx['note']?.toString() ?? '',
+              'note': tx['note']?.toString(),
             };
           }
 
@@ -634,18 +700,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
               tx['partner_type']?.toString(),
               tx[partnerField]?.toString(),
             );
-            // Lọc theo quyền dựa vào partner_type
-            itemPartnerName = _filterPartnerName(itemPartnerName, tx['partner_type']?.toString());
           } else if (tableName == 'import_orders' || tableName == 'return_orders') {
             // Nhà cung cấp - dùng supplier_id
             final supplierId = tx[partnerField]?.toString();
             itemPartnerName = supplierId != null ? (supplierMap[supplierId] ?? 'N/A') : 'N/A';
-            itemPartnerName = _filterPartnerName(itemPartnerName, tableName);
           } else if (tableName == 'sale_orders' || tableName == 'reimport_orders') {
             // Khách hàng - dùng customer_id
             final customerId = tx[partnerField]?.toString();
             itemPartnerName = customerId != null ? (customerMap[customerId] ?? 'N/A') : 'N/A';
-            itemPartnerName = _filterPartnerName(itemPartnerName, tableName);
           } else if (tableName == 'fix_send_orders' || tableName == 'fix_receive_orders') {
             // Đơn vị fix - dùng fix_unit_id nếu có, nếu không dùng fixer (tên)
             final fixUnitId = tx['fix_unit_id']?.toString();
@@ -680,6 +742,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
             'warehouse_name': warehouseName,
             'partner': itemPartnerName, // Lưu partner cho từng item
             'saleman': tx['saleman']?.toString(), // Lưu nhân viên bán
+            'note': tx['note']?.toString(), // Lưu ghi chú
+            'doanhso': tx['doanhso'], // Lưu doanh số nhân viên
           };
 
           final ticket = groupedTickets[ticketKey]!;
@@ -736,24 +800,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       }
     }
 
-    // Lọc theo filterType
     allTickets = allTickets.where((ticket) => filterType == 'all' || ticket['type'] == filterType).toList();
-
-    // Lọc các phiếu tài chính theo quyền cụ thể
-    allTickets = allTickets.where((ticket) {
-      if (ticket['table'] != 'financial_orders') return true; // Không phải phiếu tài chính thì giữ lại
-      
-      final type = ticket['type'] as String;
-      // Kiểm tra quyền cho từng loại phiếu tài chính
-      if (type == 'cost' && !widget.permissions.contains('access_cost_form')) return false;
-      if (type == 'payment' && !widget.permissions.contains('access_payment_form')) return false;
-      if (type == 'exchange' && !widget.permissions.contains('access_exchange_form')) return false;
-      if (type == 'income_other' && !widget.permissions.contains('access_income_other_form')) return false;
-      if (type == 'receive' && !widget.permissions.contains('access_receive_form')) return false;
-      if (type == 'transfer_fund' && !widget.permissions.contains('access_transfer_fund_form')) return false;
-      
-      return true; // Có quyền thì giữ lại
-    }).toList();
 
     allTickets.sort((a, b) {
       final dateA = DateTime.tryParse(a['date']?.toString() ?? '1900-01-01') ?? DateTime(1900);
@@ -766,6 +813,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
   void _showTransactionDetails(Map<String, dynamic> ticket) {
     String? saleman;
+    num? totalDoanhso;
     if (ticket['table'] == 'sale_orders' && ticket['items'] is List<dynamic>) {
       final items = ticket['items'] as List<dynamic>;
       if (items.isNotEmpty) {
@@ -775,6 +823,19 @@ class _HistoryScreenState extends State<HistoryScreen> {
             .where((s) => s.isNotEmpty)
             .toSet();
         saleman = salemanSet.isNotEmpty ? salemanSet.join(', ') : null;
+        
+        // Tính tổng doanh số của phiếu
+        totalDoanhso = items.fold<num>(
+          0,
+          (sum, item) {
+            final doanhso = item['doanhso'];
+            if (doanhso != null) {
+              final doanhsoValue = num.tryParse(doanhso.toString()) ?? 0;
+              return sum + doanhsoValue;
+            }
+            return sum;
+          },
+        );
       }
     }
 
@@ -817,8 +878,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 if (ticket['items'][0]['account'] != null && !isFinancialTicket)
                   Text('Tài Khoản: ${ticket['items'][0]['account']}'),
                 if (saleman != null) Text('Nhân viên bán: $saleman'),
-                if (ticket['note'] != null && ticket['note'].toString().isNotEmpty)
-                  Text('Ghi chú: ${ticket['note']}'),
+                if (totalDoanhso != null && totalDoanhso > 0)
+                  Text('Doanh số nhân viên: ${_formatNumber(totalDoanhso)}'),
                 if (!isFinancialTicket) ...[
                   ...ticket['items'].map<Widget>((item) {
                     final productName = item['product_name']?.toString() ?? 'N/A';
@@ -831,6 +892,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 ],
                 if (ticket['warehouse_name'] != null && ticket['warehouse_name'] != 'N/A')
                   Text('Kho: ${ticket['warehouse_name']}'),
+                if (ticket['note'] != null && ticket['note'].toString().isNotEmpty)
+                  Text('Ghi chú: ${ticket['note']}'),
                 if (!isFinancialTicket) ...[
                   const SizedBox(height: 8),
                   const Text('Chi tiết sản phẩm:', style: TextStyle(fontWeight: FontWeight.bold)),
@@ -854,6 +917,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
                         if (item['warehouse_name'] != null && item['warehouse_name'] != 'N/A')
                           Text('  Kho: ${item['warehouse_name']}'),
                         if (item['imei'] != null) Text('  IMEI: ${item['imei']}'),
+                        if (item['doanhso'] != null && item['doanhso'] != 0)
+                          Text('  Doanh số: ${_formatNumber(item['doanhso'])}'),
+                        if (item['note'] != null && item['note'].toString().isNotEmpty)
+                          Text('  Ghi chú: ${item['note']}'),
                       ],
                     );
                   }),
@@ -992,7 +1059,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
               onPressed: () async {
                 developer.log('confirmCancelTicket: User confirmed cancellation for ticket_id: $ticketId');
                 try {
-                  // Khôi phục snapshot
+                  // Khôi phục snapshot (bao gồm cả doanhso từ sub_accounts nếu có trong snapshot)
                   developer.log('confirmCancelTicket: Restoring snapshot for ticket_id: $ticketId');
                   await _restoreFromSnapshot(ticket);
 
@@ -1203,6 +1270,72 @@ class _HistoryScreenState extends State<HistoryScreen> {
         }
       }
 
+      // ✅ Khôi phục doanhso từ sub_accounts snapshot (cho sale_orders và reimport_orders)
+      if (snapshotData['sub_accounts'] != null && (table == 'sale_orders' || table == 'reimport_orders')) {
+        final subAccountData = snapshotData['sub_accounts'];
+        
+        // Xử lý cả Map (1 nhân viên) và List (nhiều nhân viên)
+        if (subAccountData is Map<String, dynamic>) {
+          // Trường hợp 1 nhân viên
+          final username = subAccountData['username']?.toString();
+          final doanhso = subAccountData['doanhso'];
+          
+          if (username != null && username.isNotEmpty) {
+            try {
+              developer.log('restoreSnapshot: Restoring sub_account doanhso for username: $username, doanhso: $doanhso');
+              
+              // Parse doanhso - có thể là int hoặc double
+              final doanhsoValue = doanhso is int 
+                  ? doanhso
+                  : doanhso is double
+                      ? doanhso.round()
+                      : int.tryParse(doanhso?.toString() ?? '0') ?? 0;
+              
+              await widget.tenantClient
+                  .from('sub_accounts')
+                  .update({'doanhso': doanhsoValue})
+                  .eq('username', username);
+              
+              developer.log('restoreSnapshot: ✅ Successfully restored sub_account doanhso for username: $username');
+            } catch (e) {
+              developer.log('restoreSnapshot: ❌ ERROR restoring sub_account doanhso: $e');
+              // Không throw để tiếp tục restore các dữ liệu khác
+            }
+          }
+        } else if (subAccountData is List) {
+          // Trường hợp nhiều nhân viên (reimport_orders có thể có nhiều IMEI từ nhiều nhân viên)
+          for (var accountData in subAccountData) {
+            if (accountData is Map<String, dynamic>) {
+              final username = accountData['username']?.toString();
+              final doanhso = accountData['doanhso'];
+              
+              if (username != null && username.isNotEmpty) {
+                try {
+                  developer.log('restoreSnapshot: Restoring sub_account doanhso for username: $username, doanhso: $doanhso');
+                  
+                  // Parse doanhso - có thể là int hoặc double
+                  final doanhsoValue = doanhso is int 
+                      ? doanhso
+                      : doanhso is double
+                          ? doanhso.round()
+                          : int.tryParse(doanhso?.toString() ?? '0') ?? 0;
+                  
+                  await widget.tenantClient
+                      .from('sub_accounts')
+                      .update({'doanhso': doanhsoValue})
+                      .eq('username', username);
+                  
+                  developer.log('restoreSnapshot: ✅ Successfully restored sub_account doanhso for username: $username');
+                } catch (e) {
+                  developer.log('restoreSnapshot: ❌ ERROR restoring sub_account doanhso for username $username: $e');
+                  // Không throw để tiếp tục restore các nhân viên khác
+                }
+              }
+            }
+          }
+        }
+      }
+
       const validTables = [
         'financial_orders',
         'sale_orders',
@@ -1251,9 +1384,16 @@ class _HistoryScreenState extends State<HistoryScreen> {
     );
 
     try {
-      // Android 11+ (API 30+) sử dụng Scoped Storage, không cần xin quyền WRITE_EXTERNAL_STORAGE
-      // Chỉ cần lưu vào thư mục Documents hoặc Downloads của app
-      
+      // Kiểm tra và yêu cầu quyền lưu trữ (nếu cần) - Android 13+ không cần
+      final hasPermission = await StorageHelper.requestStoragePermissionIfNeeded();
+      if (!hasPermission) {
+          Navigator.pop(context);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Cần quyền lưu trữ để xuất Excel')),
+          );
+          return;
+      }
+
       List<Map<String, dynamic>> exportTickets = tickets;
       if (hasMoreData && filterType == 'all' && dateFrom == null && dateTo == null) {
         exportTickets = await _fetchTickets(paginated: false);
@@ -1271,23 +1411,75 @@ class _HistoryScreenState extends State<HistoryScreen> {
       excel.delete('Sheet1');
       final sheet = excel['LichSuPhieu'];
 
-      final headers = [
-        TextCellValue('Loại Phiếu'),
-        TextCellValue('Đối Tác'),
-        TextCellValue('Sản phẩm'),
-        TextCellValue('Kho'),
-        TextCellValue('IMEI'),
-        TextCellValue('Số Tiền'),
-        TextCellValue('Đơn Vị Tiền'),
-        TextCellValue('Số Lượng'),
-        TextCellValue('Ngày'),
-        TextCellValue('Tài Khoản'),
-        TextCellValue('Nhân viên bán'),
-        TextCellValue('Ghi chú'),
+      final headerLabels = <String>[
+        'Loại Phiếu',
+        'Đối Tác',
+        'Sản phẩm',
+        'Kho',
+        'IMEI',
+        'Số Tiền',
+        'Đơn Vị Tiền',
+        'Số Lượng',
+        'Ngày',
+        'Tài Khoản',
+        'Nhân viên bán',
+        'Doanh số nhân viên',
+        'Ghi chú',
       ];
+      final headers = headerLabels.map(TextCellValue.new).toList();
 
       sheet.appendRow(headers);
 
+      final border = Border(borderStyle: BorderStyle.Thin);
+      final headerStyle = CellStyle(
+        bold: true,
+        topBorder: border,
+        bottomBorder: border,
+        leftBorder: border,
+        rightBorder: border,
+        verticalAlign: VerticalAlign.Center,
+        horizontalAlign: HorizontalAlign.Center,
+        textWrapping: TextWrapping.WrapText,
+      );
+      final dataStyle = CellStyle(
+        topBorder: border,
+        bottomBorder: border,
+        leftBorder: border,
+        rightBorder: border,
+        verticalAlign: VerticalAlign.Center,
+        horizontalAlign: HorizontalAlign.Center,
+        textWrapping: TextWrapping.WrapText,
+      );
+      final multilineDataStyle = CellStyle(
+        topBorder: border,
+        bottomBorder: border,
+        leftBorder: border,
+        rightBorder: border,
+        verticalAlign: VerticalAlign.Top,
+        horizontalAlign: HorizontalAlign.Center,
+        textWrapping: TextWrapping.WrapText,
+      );
+
+      final columnCount = headers.length;
+      final maxColumnWidths = List<double>.filled(columnCount, 0);
+      final Map<int, int> rowLineCounts = {};
+
+      for (int columnIndex = 0; columnIndex < columnCount; columnIndex++) {
+        final cell = sheet.cell(
+          CellIndex.indexByColumnRow(columnIndex: columnIndex, rowIndex: 0),
+        );
+        cell.cellStyle = headerStyle;
+        _updateExcelMetrics(
+          rowLineCounts: rowLineCounts,
+          maxColumnWidths: maxColumnWidths,
+          rowIndex: 0,
+          columnIndex: columnIndex,
+          value: headerLabels[columnIndex],
+        );
+      }
+
+      int dataRowIndex = 2; // Bắt đầu từ row 2 (sau header row)
+      const multilineColumns = {4, 12};
       for (var ticket in exportTickets) {
         final tableName = ticket['table'] as String;
         final type = _getDisplayType(ticket['type'], tableName);
@@ -1309,24 +1501,66 @@ class _HistoryScreenState extends State<HistoryScreen> {
               ? item['account'].toString()
               : '';
           final saleman = item['saleman']?.toString() ?? '';
-          final note = ticket['note']?.toString() ?? '';
+          final doanhso = (item['doanhso'] != null && item['doanhso'] != 0)
+              ? _formatNumber(item['doanhso'])
+              : '';
+          // Ưu tiên note của item, nếu không có thì lấy note của ticket
+          final note = (item['note'] != null && item['note'].toString().isNotEmpty)
+              ? item['note'].toString()
+              : (ticket['note'] != null && ticket['note'].toString().isNotEmpty)
+                  ? ticket['note'].toString()
+                  : '';
+          final imeiCellValue = _formatImeiForExcelCell(imei);
 
-          sheet.appendRow([
-            TextCellValue(type),
-            TextCellValue(itemPartner),
-            TextCellValue(productName),
-            TextCellValue(warehouseName),
-            TextCellValue(imei),
-            TextCellValue(_formatNumber(amount)),
-            TextCellValue(currency),
-            TextCellValue(quantity),
-            TextCellValue(date),
-            TextCellValue(account),
-            TextCellValue(saleman),
-            TextCellValue(note),
-          ]);
+          final rowValues = <String>[
+            type,
+            itemPartner,
+            productName,
+            warehouseName,
+            imeiCellValue,
+            _formatNumber(amount),
+            currency,
+            quantity,
+            date,
+            account,
+            saleman,
+            doanhso,
+            note,
+          ];
+          final rowData = rowValues.map(TextCellValue.new).toList();
+          
+          sheet.appendRow(rowData);
+
+          final currentRowIndex = dataRowIndex - 1;
+          for (int columnIndex = 0;
+              columnIndex < columnCount;
+              columnIndex++) {
+            final cell = sheet.cell(
+              CellIndex.indexByColumnRow(
+                columnIndex: columnIndex,
+                rowIndex: currentRowIndex,
+              ),
+            );
+            final isMultiline = multilineColumns.contains(columnIndex);
+            cell.cellStyle = isMultiline ? multilineDataStyle : dataStyle;
+            _updateExcelMetrics(
+              rowLineCounts: rowLineCounts,
+              maxColumnWidths: maxColumnWidths,
+              rowIndex: currentRowIndex,
+              columnIndex: columnIndex,
+              value: rowValues[columnIndex],
+            );
+          }
+
+          dataRowIndex++;
         }
       }
+
+      _applyExcelSizing(
+        sheet: sheet,
+        maxColumnWidths: maxColumnWidths,
+        rowLineCounts: rowLineCounts,
+      );
 
       if (excel.sheets.containsKey('Sheet1')) {
         excel.delete('Sheet1');
@@ -1335,20 +1569,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
         print('Không tìm thấy Sheet1 sau khi tạo các sheet.');
       }
 
-      // Lấy thư mục lưu file tùy theo phiên bản Android
-      Directory downloadsDir;
-      if (Platform.isAndroid) {
-        // Android 11+ (API 30+): Sử dụng getExternalStorageDirectory hoặc Documents
-        // Không cần quyền MANAGE_EXTERNAL_STORAGE
-        final directory = await getApplicationDocumentsDirectory();
-        downloadsDir = Directory('${directory.path}/Excel');
-        
-        // Tạo thư mục Excel nếu chưa tồn tại
-        if (!await downloadsDir.exists()) {
-          await downloadsDir.create(recursive: true);
-        }
-      } else {
-        downloadsDir = await getApplicationDocumentsDirectory();
+      // Sử dụng StorageHelper để lấy thư mục Downloads (hỗ trợ Android 13+)
+      final downloadsDir = await StorageHelper.getDownloadDirectory();
+      if (downloadsDir == null) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Không thể truy cập thư mục Downloads')),
+        );
+        return;
       }
 
       final now = DateTime.now();
@@ -1412,9 +1640,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 });
               },
               decoration: const InputDecoration(
-                labelText: 'Loại Phiếu',
                 border: OutlineInputBorder(),
                 contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                floatingLabelBehavior: FloatingLabelBehavior.never,
               ),
             ),
           ),

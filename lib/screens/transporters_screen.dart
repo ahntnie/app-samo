@@ -1,13 +1,14 @@
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide Border, BorderStyle;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:excel/excel.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:open_file/open_file.dart';
 import 'dart:io';
 import '../helpers/export_progress_dialog.dart';
 import 'dart:developer' as developer;
 import '../helpers/error_handler.dart';
+import '../helpers/storage_helper.dart';
+import '../helpers/excel_style_helper.dart';
 
 // Cache utility class
 class CacheUtil {
@@ -603,41 +604,116 @@ class _TransporterDetailsDialogState extends State<TransporterDetailsDialog> {
         currentRow++;
       }
 
-      // Thêm tiêu đề bảng
-      sheet.cell(CellIndex.indexByString("A$currentRow")).value = TextCellValue('Loại giao dịch');
-      sheet.cell(CellIndex.indexByString("B$currentRow")).value = TextCellValue('Ngày');
-      sheet.cell(CellIndex.indexByString("C$currentRow")).value = TextCellValue('Số tiền');
-      sheet.cell(CellIndex.indexByString("D$currentRow")).value = TextCellValue('Đơn vị tiền');
-      sheet.cell(CellIndex.indexByString("E$currentRow")).value = TextCellValue('Chi tiết');
+      final headers = ['Loại giao dịch', 'Ngày', 'Sản phẩm', 'IMEI', 'Số tiền', 'Đơn vị tiền'];
+      final columnCount = headers.length;
+      final sizingTracker = ExcelSizingTracker(columnCount);
+      final styles = ExcelCellStyles.build();
+
+      for (int columnIndex = 0; columnIndex < columnCount; columnIndex++) {
+        final cell = sheet.cell(
+          CellIndex.indexByColumnRow(
+            columnIndex: columnIndex,
+            rowIndex: currentRow - 1,
+          ),
+        );
+        cell.value = TextCellValue(headers[columnIndex]);
+        cell.cellStyle = styles.header;
+        sizingTracker.update(currentRow - 1, columnIndex, headers[columnIndex]);
+      }
       currentRow++;
 
       for (int i = 0; i < exportTransactions.length; i++) {
         final transaction = exportTransactions[i];
         final type = transaction['type'] as String;
         final createdAt = formatDate(transaction['created_at']?.toString());
-        final amount = transaction['transport_fee'] ?? transaction['amount'] ?? transaction['price'] ?? 0;
         final currency = transaction['currency']?.toString() ?? 'VND';
-        final formattedAmount = formatNumber(amount);
-        final productName = transaction['product_name'] ?? 'Không xác định';
-        final details = type == 'Phiếu Chuyển Kho Quốc Tế' ||
-                type == 'Phiếu Chuyển Kho Nội Địa' ||
-                type == 'Phiếu Nhập Kho Vận Chuyển'
-            ? 'Sản phẩm: $productName, IMEI: ${transaction['imei']}'
-            : type == 'Phiếu Bán Hàng'
-                ? 'Sản phẩm: $productName, IMEI: ${transaction['imei']}'
-                : type == 'Phiếu Nhập Lại Hàng'
-                    ? 'Sản phẩm: $productName, IMEI: ${transaction['imei']}, Số lượng: ${transaction['quantity']}'
-                    : type == 'Chi Thanh Toán Đối Tác'
-                        ? 'Tài khoản: ${transaction['account']}, Ghi chú: ${transaction['note'] ?? ''}'
-                        : '';
+        final productName = transaction['product_name']?.toString() ?? 'Không xác định';
 
-        sheet.cell(CellIndex.indexByString("A$currentRow")).value = TextCellValue(type);
-        sheet.cell(CellIndex.indexByString("B$currentRow")).value = TextCellValue(createdAt);
-        sheet.cell(CellIndex.indexByString("C$currentRow")).value = TextCellValue(formattedAmount);
-        sheet.cell(CellIndex.indexByString("D$currentRow")).value = TextCellValue(currency);
-        sheet.cell(CellIndex.indexByString("E$currentRow")).value = TextCellValue(details);
-        currentRow++;
+        final imeiStr = transaction['imei']?.toString() ?? '';
+        final imeiList = imeiStr.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+        
+        // ✅ Kiểm tra xem transaction có IMEI không (các phiếu vận chuyển, bán hàng, nhập lại)
+        final hasImei = imeiList.isNotEmpty && 
+            (type == 'Phiếu Chuyển Kho Quốc Tế' || 
+             type == 'Phiếu Chuyển Kho Nội Địa' || 
+             type == 'Phiếu Nhập Kho Vận Chuyển' || 
+             type == 'Phiếu Bán Hàng' || 
+             type == 'Phiếu Nhập Lại Hàng');
+
+        // Tính số tiền cho mỗi IMEI
+        num totalAmount = transaction['transport_fee'] ?? transaction['amount'] ?? transaction['price'] ?? 0;
+        num amountPerImei;
+        if (type == 'Phiếu Bán Hàng' || type == 'Phiếu Nhập Lại Hàng') {
+          // Với phiếu có price, mỗi IMEI = price (đơn giá)
+          amountPerImei = transaction['price'] as num? ?? 0;
+        } else if (type == 'Phiếu Chuyển Kho Quốc Tế' || type == 'Phiếu Chuyển Kho Nội Địa' || type == 'Phiếu Nhập Kho Vận Chuyển') {
+          // Với transporter_orders, chia transport_fee cho số lượng IMEI
+          final imeiCount = imeiList.isNotEmpty ? imeiList.length : 1;
+          amountPerImei = imeiCount > 0 ? (totalAmount / imeiCount) : totalAmount;
+        } else {
+          // Với financial_orders (không có IMEI), dùng totalAmount
+          amountPerImei = totalAmount;
+        }
+        final formattedAmountPerImei = formatNumber(amountPerImei);
+        final formattedAmount = formatNumber(totalAmount);
+
+        if (hasImei && imeiList.isNotEmpty) {
+          // ✅ Mỗi IMEI là 1 dòng riêng - tách sản phẩm và IMEI thành 2 cột
+          for (final singleImei in imeiList) {
+            final rowValues = [
+              type,
+              createdAt,
+              productName,
+              singleImei,
+              formattedAmountPerImei,
+              currency,
+            ];
+
+            for (int columnIndex = 0; columnIndex < columnCount; columnIndex++) {
+              final cell = sheet.cell(
+                CellIndex.indexByColumnRow(
+                  columnIndex: columnIndex,
+                  rowIndex: currentRow - 1,
+                ),
+              );
+              final value = rowValues[columnIndex];
+              final isMultiline = columnIndex == 3;
+              cell.value = TextCellValue(value);
+              cell.cellStyle = isMultiline ? styles.multiline : styles.centered;
+              sizingTracker.update(currentRow - 1, columnIndex, value);
+            }
+
+            currentRow++;
+          }
+        } else {
+          final rowValues = [
+            type,
+            createdAt,
+            productName != 'Không xác định' ? productName : '',
+            '',
+            formattedAmount,
+            currency,
+          ];
+
+          for (int columnIndex = 0; columnIndex < columnCount; columnIndex++) {
+            final cell = sheet.cell(
+              CellIndex.indexByColumnRow(
+                columnIndex: columnIndex,
+                rowIndex: currentRow - 1,
+              ),
+            );
+            final value = rowValues[columnIndex];
+            final isMultiline = columnIndex == 3;
+            cell.value = TextCellValue(value);
+            cell.cellStyle = isMultiline ? styles.multiline : styles.centered;
+            sizingTracker.update(currentRow - 1, columnIndex, value);
+          }
+
+          currentRow++;
+        }
       }
+
+      sizingTracker.applyToSheet(sheet);
 
       if (excel.sheets.containsKey('Sheet1')) {
         excel.delete('Sheet1');
@@ -646,14 +722,16 @@ class _TransporterDetailsDialogState extends State<TransporterDetailsDialog> {
         print('Không tìm thấy Sheet1 sau khi tạo các sheet.');
       }
 
-      Directory downloadsDir;
-      if (Platform.isAndroid) {
-        downloadsDir = Directory('/storage/emulated/0/Download');
-        if (!await downloadsDir.exists()) {
-          await downloadsDir.create(recursive: true);
+      // Sử dụng StorageHelper để lấy thư mục Downloads (hỗ trợ Android 13+)
+      final downloadsDir = await StorageHelper.getDownloadDirectory();
+      if (downloadsDir == null) {
+        if (mounted) ExportProgressDialog.hide(context);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Không thể truy cập thư mục Downloads')),
+          );
         }
-      } else {
-        downloadsDir = await getTemporaryDirectory();
+        return;
       }
 
       final now = DateTime.now();

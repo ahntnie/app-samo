@@ -213,6 +213,13 @@ class _CostFormState extends State<CostForm> {
                       "Đã tạo phiếu chi phí cho $account với số tiền ${formatNumberLocal(amount!)} $currency",
                       'cost_created',
                     );
+                    
+                    // ✅ Gửi thông báo push đến tất cả thiết bị
+                    await NotificationService.sendNotificationToAll(
+                      "Phiếu Chi Phí Đã Tạo",
+                      "Đã tạo phiếu chi phí cho $account với số tiền ${formatNumberLocal(amount!)} $currency",
+                      data: {'type': 'cost_created'},
+                    );
 
                     final newBalance = balance - amount!;
                     await widget.tenantClient

@@ -1,13 +1,14 @@
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide Border, BorderStyle;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:excel/excel.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:open_file/open_file.dart';
 import 'dart:io';
 import 'dart:developer' as developer;
 import '../helpers/export_progress_dialog.dart';
 import '../helpers/error_handler.dart';
+import '../helpers/storage_helper.dart';
+import '../helpers/excel_style_helper.dart';
 
 // Cache utility class
 class CacheUtil {
@@ -729,27 +730,38 @@ class _FixerDetailsDialogState extends State<FixerDetailsDialog> {
         currentRow++;
       }
 
-      // Thêm tiêu đề bảng
-      List<TextCellValue> headers = [
-        TextCellValue('Loại giao dịch'),
-        TextCellValue('Ngày'),
-        TextCellValue('Số tiền'),
-        TextCellValue('Đơn vị tiền'),
-        TextCellValue('Mã sản phẩm'),
-        TextCellValue('Tên sản phẩm'),
-        TextCellValue('IMEI'),
-        TextCellValue('Số lượng'),
-        TextCellValue('Mã kho'),
-        TextCellValue('Tên kho'),
-        TextCellValue('Tài khoản'),
-        TextCellValue('Ghi chú'),
+      final headerLabels = [
+        'Loại giao dịch',
+        'Ngày',
+        'Tên sản phẩm',
+        'IMEI',
+        'Số lượng',
+        'Số tiền',
+        'Đơn vị tiền',
+        'Kho',
+        'Tài khoản',
+        'Ghi chú',
       ];
+      final columnCount = headerLabels.length;
+      final sizingTracker = ExcelSizingTracker(columnCount);
+      final styles = ExcelCellStyles.build();
 
-      for (int i = 0; i < headers.length; i++) {
-        final columnLetter = String.fromCharCode(65 + i);
-        sheet.cell(CellIndex.indexByString("${columnLetter}$currentRow")).value = headers[i];
+      for (int columnIndex = 0; columnIndex < columnCount; columnIndex++) {
+        final cell = sheet.cell(
+          CellIndex.indexByColumnRow(
+            columnIndex: columnIndex,
+            rowIndex: currentRow - 1,
+          ),
+        );
+        final label = headerLabels[columnIndex];
+        cell.value = TextCellValue(label);
+        cell.cellStyle = styles.header;
+        sizingTracker.update(currentRow - 1, columnIndex, label);
       }
+      
       currentRow++;
+
+      const multilineColumns = {'IMEI', 'Ghi chú'};
 
       for (int i = 0; i < exportTransactions.length; i++) {
         final transaction = exportTransactions[i];
@@ -761,34 +773,78 @@ class _FixerDetailsDialogState extends State<FixerDetailsDialog> {
         final formattedAmount = formatNumber(amount);
         final productId = transaction['product_id']?.toString() ?? '';
         final productName = CacheUtil.getProductName(productId);
-        final imei = transaction['imei']?.toString() ?? '';
-        final quantity = transaction['quantity']?.toString() ?? '';
+        final imeiStr = transaction['imei']?.toString() ?? '';
+        final imeiList = imeiStr.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+        final hasMultipleImeis = imeiList.length > 1;
+        final quantityStr = transaction['quantity']?.toString() ?? '';
         final warehouseId = transaction['warehouse_id']?.toString() ?? '';
         final warehouseName = CacheUtil.getWarehouseName(warehouseId);
         final account = transaction['account']?.toString() ?? '';
         final note = transaction['note']?.toString() ?? '';
 
-        List<TextCellValue> row = [
-          TextCellValue(type),
-          TextCellValue(createdAt),
-          TextCellValue(formattedAmount),
-          TextCellValue(currency),
-          TextCellValue(productId),
-          TextCellValue(productName),
-          TextCellValue(imei),
-          TextCellValue(quantity),
-          TextCellValue(warehouseId),
-          TextCellValue(warehouseName),
-          TextCellValue(account),
-          TextCellValue(note),
-        ];
-
-        for (int j = 0; j < row.length; j++) {
-          final columnLetter = String.fromCharCode(65 + j);
-          sheet.cell(CellIndex.indexByString("${columnLetter}$currentRow")).value = row[j];
+        if (hasMultipleImeis) {
+          // ✅ Mỗi IMEI là 1 dòng - thứ tự cột mới: Loại giao dịch, Ngày, Tên sản phẩm, IMEI, Số lượng, Số tiền, Đơn vị tiền, Kho, Tài khoản, Ghi chú
+          for (final singleImei in imeiList) {
+            final rowValues = [
+              type,
+              createdAt,
+              productName,
+              singleImei,
+              '1',
+              formattedAmount,
+              currency,
+              warehouseName,
+              account,
+              note,
+            ];
+            for (int columnIndex = 0; columnIndex < columnCount; columnIndex++) {
+              final cell = sheet.cell(
+                CellIndex.indexByColumnRow(
+                  columnIndex: columnIndex,
+                  rowIndex: currentRow - 1,
+                ),
+              );
+              final header = headerLabels[columnIndex];
+              final value = rowValues[columnIndex];
+              final isMultiline = multilineColumns.contains(header);
+              cell.value = TextCellValue(value);
+              cell.cellStyle = isMultiline ? styles.multiline : styles.centered;
+              sizingTracker.update(currentRow - 1, columnIndex, value);
+            }
+            currentRow++;
+          }
+        } else {
+          final rowValues = [
+            type,
+            createdAt,
+            productName,
+            imeiStr,
+            quantityStr,
+            formattedAmount,
+            currency,
+            warehouseName,
+            account,
+            note,
+          ];
+          for (int columnIndex = 0; columnIndex < columnCount; columnIndex++) {
+            final cell = sheet.cell(
+              CellIndex.indexByColumnRow(
+                columnIndex: columnIndex,
+                rowIndex: currentRow - 1,
+              ),
+            );
+            final header = headerLabels[columnIndex];
+            final value = rowValues[columnIndex];
+            final isMultiline = multilineColumns.contains(header);
+            cell.value = TextCellValue(value);
+            cell.cellStyle = isMultiline ? styles.multiline : styles.centered;
+            sizingTracker.update(currentRow - 1, columnIndex, value);
+          }
+          currentRow++;
         }
-        currentRow++;
       }
+
+      sizingTracker.applyToSheet(sheet);
 
       if (excel.sheets.containsKey('Sheet1')) {
         excel.delete('Sheet1');
@@ -797,14 +853,16 @@ class _FixerDetailsDialogState extends State<FixerDetailsDialog> {
         print('Không tìm thấy Sheet1 sau khi tạo các sheet.');
       }
 
-      Directory downloadsDir;
-      if (Platform.isAndroid) {
-        downloadsDir = Directory('/storage/emulated/0/Download');
-        if (!await downloadsDir.exists()) {
-          await downloadsDir.create(recursive: true);
+      // Sử dụng StorageHelper để lấy thư mục Downloads (hỗ trợ Android 13+)
+      final downloadsDir = await StorageHelper.getDownloadDirectory();
+      if (downloadsDir == null) {
+        if (mounted) ExportProgressDialog.hide(context);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Không thể truy cập thư mục Downloads')),
+          );
         }
-      } else {
-        downloadsDir = await getTemporaryDirectory();
+        return;
       }
 
       final now = DateTime.now();

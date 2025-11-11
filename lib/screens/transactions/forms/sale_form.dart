@@ -7,7 +7,6 @@ import '../../../helpers/cache_helper.dart';
 import 'dart:math' as math;
 import 'package:flutter/services.dart';
 import '../../text_scanner_screen.dart';
-import '../../../helpers/error_handler.dart';
 
 // Cache utility class
 class CacheUtil {
@@ -36,6 +35,7 @@ class SaleForm extends StatefulWidget {
   final String? initialImei;
   final String? initialNote;
   final String? initialSalesman;
+  final String? initialDoanhso;
   final List<Map<String, dynamic>> ticketItems;
   final int? editIndex;
 
@@ -50,6 +50,7 @@ class SaleForm extends StatefulWidget {
     this.initialImei,
     this.initialNote,
     this.initialSalesman,
+    this.initialDoanhso,
     this.ticketItems = const [],
     this.editIndex,
   });
@@ -69,6 +70,7 @@ class _SaleFormState extends State<SaleForm> {
   String? currency;
   String? note;
   String? salesman;
+  String? doanhso;
   List<Map<String, dynamic>> ticketItems = [];
   List<Map<String, dynamic>> customers = []; // Changed to store id and name
   List<String> currencies = [];
@@ -87,6 +89,7 @@ class _SaleFormState extends State<SaleForm> {
   final TextEditingController productController = TextEditingController();
   final TextEditingController priceController = TextEditingController();
   final TextEditingController salesmanController = TextEditingController();
+  final TextEditingController doanhsoController = TextEditingController();
 
   final NumberFormat numberFormat = NumberFormat.decimalPattern('vi_VN');
 
@@ -101,6 +104,7 @@ class _SaleFormState extends State<SaleForm> {
     imei = widget.initialImei ?? '';
     note = widget.initialNote;
     salesman = widget.initialSalesman;
+    doanhso = widget.initialDoanhso;
     currency = 'VND';
     ticketItems = List.from(widget.ticketItems);
 
@@ -110,6 +114,7 @@ class _SaleFormState extends State<SaleForm> {
     priceController.text = price != null ? numberFormat.format(double.parse(price!)) : '';
     imeiController.text = imei ?? '';
     salesmanController.text = salesman ?? '';
+    doanhsoController.text = doanhso != null ? numberFormat.format(double.parse(doanhso!)) : '';
 
     if (widget.initialImei != null && widget.initialImei!.isNotEmpty) {
       imeiList = widget.initialImei!.split(',').where((e) => e.trim().isNotEmpty).toList();
@@ -125,6 +130,7 @@ class _SaleFormState extends State<SaleForm> {
     productController.dispose();
     priceController.dispose();
     salesmanController.dispose();
+    doanhsoController.dispose();
     super.dispose();
   }
 
@@ -137,11 +143,12 @@ class _SaleFormState extends State<SaleForm> {
     try {
       final supabase = widget.tenantClient;
 
-      final customerResponse = await supabase.from('customers').select('id, name');
+      final customerResponse = await supabase.from('customers').select('id, name, phone');
       final customerList = customerResponse
           .map((e) => <String, dynamic>{
                 'id': e['id'].toString(),
                 'name': e['name'] as String,
+                'phone': e['phone'] as String? ?? '',
               })
           .toList()
         ..sort((a, b) => (a['name'] as String).compareTo(b['name'] as String));
@@ -869,6 +876,7 @@ class _SaleFormState extends State<SaleForm> {
 
     // Lấy giá trị từ biến price (đã được lưu dạng số thực)
     final amount = double.tryParse(price!) ?? 0;
+    final doanhsoValue = double.tryParse(doanhso?.replaceAll('.', '') ?? '0') ?? 0;
     final item = {
       'product_id': productId!,
       'product_name': productName!,
@@ -876,6 +884,7 @@ class _SaleFormState extends State<SaleForm> {
       'price': amount, // Lưu giá trị số thực, không định dạng
       'currency': currency!,
       'note': note,
+      'doanhso': doanhsoValue,
     };
 
     setState(() {
@@ -1048,23 +1057,46 @@ class _SaleFormState extends State<SaleForm> {
                         final query = textEditingValue.text.toLowerCase();
                         if (query.isEmpty) return customers.take(10).toList();
                         final filtered = customers
-                            .where((option) => (option['name'] as String).toLowerCase().contains(query))
+                            .where((option) {
+                              final name = (option['name'] as String).toLowerCase();
+                              final phone = (option['phone'] as String? ?? '').toLowerCase();
+                              return name.contains(query) || phone.contains(query);
+                            })
                             .toList()
                           ..sort((a, b) {
-                            final aLower = (a['name'] as String).toLowerCase();
-                            final bLower = (b['name'] as String).toLowerCase();
-                            final aStartsWith = aLower.startsWith(query);
-                            final bStartsWith = bLower.startsWith(query);
+                            final aName = (a['name'] as String).toLowerCase();
+                            final bName = (b['name'] as String).toLowerCase();
+                            // Ưu tiên khớp theo tên trước
+                            final aNameMatch = aName.contains(query);
+                            final bNameMatch = bName.contains(query);
+                            if (aNameMatch != bNameMatch) {
+                              return aNameMatch ? -1 : 1;
+                            }
+                            // Nếu đều khớp theo phone, ưu tiên tên
+                            if (!aNameMatch && !bNameMatch) {
+                              return aName.compareTo(bName);
+                            }
+                            final aStartsWith = aName.startsWith(query);
+                            final bStartsWith = bName.startsWith(query);
                             if (aStartsWith != bStartsWith) {
                               return aStartsWith ? -1 : 1;
                             }
-                            return aLower.compareTo(bLower);
+                            return aName.compareTo(bName);
                           });
-                        return filtered.isNotEmpty ? filtered.take(10).toList() : [{'id': '', 'name': 'Không tìm thấy khách hàng'}];
+                        return filtered.isNotEmpty ? filtered.take(10).toList() : [{'id': '', 'name': 'Không tìm thấy khách hàng', 'phone': ''}];
                       },
-                      displayStringForOption: (option) => option['name'] as String,
+                      displayStringForOption: (option) {
+                        final name = option['name'] as String;
+                        final phone = option['phone'] as String? ?? '';
+                        if (phone.isNotEmpty) {
+                          return '$name - $phone';
+                        }
+                        return name;
+                      },
                       onSelected: (Map<String, dynamic> selection) {
                         if (selection['id'] == '') return;
+                        // ✅ Đóng dropdown và clear focus sau khi chọn
+                        FocusScope.of(context).unfocus();
                         setState(() {
                           customerId = selection['id'] as String;
                           customerName = selection['name'] as String;
@@ -1073,7 +1105,12 @@ class _SaleFormState extends State<SaleForm> {
                         _fetchCustomerDebt();
                       },
                       fieldViewBuilder: (context, controller, focusNode, onFieldSubmitted) {
-                        controller.text = customerController.text;
+                        // ✅ Sync controller với customerController
+                        if (controller.text != customerController.text) {
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            controller.text = customerController.text;
+                          });
+                        }
                         return TextField(
                           controller: controller,
                           focusNode: focusNode,
@@ -1086,6 +1123,10 @@ class _SaleFormState extends State<SaleForm> {
                                 customerDebt = 0;
                               }
                             });
+                          },
+                          onTap: () {
+                            // ✅ Mở lại dropdown khi tap vào field
+                            // Autocomplete sẽ tự động mở khi có focus
                           },
                           decoration: const InputDecoration(
                             labelText: 'Khách hàng',
@@ -1483,7 +1524,7 @@ class _SaleFormState extends State<SaleForm> {
                   }
                 },
                 decoration: const InputDecoration(
-                  labelText: 'Số tiền',
+                  labelText: 'Số tiền mỗi sản phẩm',
                   border: InputBorder.none,
                   isDense: true,
                   contentPadding: EdgeInsets.symmetric(vertical: 8, horizontal: 0),
@@ -1501,6 +1542,40 @@ class _SaleFormState extends State<SaleForm> {
                   currency = val;
                 }),
                 decoration: const InputDecoration(
+                  border: InputBorder.none,
+                  isDense: true,
+                  contentPadding: EdgeInsets.symmetric(vertical: 8, horizontal: 0),
+                  floatingLabelBehavior: FloatingLabelBehavior.auto,
+                  labelStyle: TextStyle(fontSize: 14),
+                ),
+              ),
+            ),
+            wrapField(
+              TextFormField(
+                controller: doanhsoController,
+                keyboardType: TextInputType.number,
+                onChanged: (val) {
+                  final cleanedValue = val.replaceAll(RegExp(r'[^0-9]'), '');
+                  if (cleanedValue.isNotEmpty) {
+                    final parsedValue = double.tryParse(cleanedValue);
+                    if (parsedValue != null) {
+                      final formattedValue = numberFormat.format(parsedValue);
+                      doanhsoController.value = TextEditingValue(
+                        text: formattedValue,
+                        selection: TextSelection.collapsed(offset: formattedValue.length),
+                      );
+                      setState(() {
+                        doanhso = cleanedValue; // Lưu giá trị số thực
+                      });
+                    }
+                  } else {
+                    setState(() {
+                      doanhso = null;
+                    });
+                  }
+                },
+                decoration: const InputDecoration(
+                  labelText: 'Doanh số mỗi sản phẩm',
                   border: InputBorder.none,
                   isDense: true,
                   contentPadding: EdgeInsets.symmetric(vertical: 8, horizontal: 0),

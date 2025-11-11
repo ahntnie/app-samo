@@ -1,16 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:bcrypt/bcrypt.dart';
+import 'package:intl/intl.dart';
 
 class SubAccount {
   String id;
   String username;
   List<String> permissions;
+  int doanhso;
 
   SubAccount({
     required this.id,
     required this.username,
     required this.permissions,
+    required this.doanhso,
   });
 
   factory SubAccount.fromMap(Map<String, dynamic> map) {
@@ -18,6 +21,7 @@ class SubAccount {
       id: map['id'] ?? '',
       username: map['username'] ?? '',
       permissions: List<String>.from(map['permissions'] ?? []),
+      doanhso: (map['doanhso'] as num?)?.toInt() ?? 0,
     );
   }
 }
@@ -77,8 +81,61 @@ class _AccountScreenState extends State<AccountScreen> {
   List<String> get allPermissions => availablePermissions.map((p) => p['value']!).toList();
 
   Future<List<SubAccount>> getSubAccounts() async {
-    final response = await widget.tenantClient.from('sub_accounts').select('id, username, permissions');
+    final response = await widget.tenantClient.from('sub_accounts').select('id, username, permissions, doanhso');
     return (response as List<dynamic>).map((map) => SubAccount.fromMap(map)).toList();
+  }
+
+  // ✅ Format số với dấu phân cách hàng nghìn (ví dụ: 1000000 → 1.000.000)
+  String _formatNumber(num value) {
+    return NumberFormat('#,###', 'vi_VN').format(value).replaceAll(',', '.');
+  }
+
+  // ✅ Reset doanh số về 0
+  Future<void> resetDoanhso(String id, String username) async {
+    // Hiển thị dialog xác nhận
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text(
+          'Xác nhận reset doanh số',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        content: Text(
+          'Bạn có chắc chắn muốn reset doanh số của tài khoản "$username" về 0 không?\nThao tác này không thể hoàn tác.',
+          style: const TextStyle(color: Colors.red),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Hủy'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+            child: const Text('Reset', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    try {
+      await widget.tenantClient
+          .from('sub_accounts')
+          .update({'doanhso': 0})
+          .eq('id', id);
+
+      setState(() {}); // Refresh danh sách
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Đã reset doanh số của "$username" về 0')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Lỗi khi reset doanh số: $e')),
+      );
+    }
   }
 
   void addSubAccount() {
@@ -216,26 +273,58 @@ class _AccountScreenState extends State<AccountScreen> {
                       margin: const EdgeInsets.symmetric(vertical: 8),
                       child: Padding(
                         padding: const EdgeInsets.all(12),
-                        child: Row(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
+                            // ✅ Hàng đầu: Tên tài khoản và Doanh số trong container màu
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                              decoration: BoxDecoration(
+                                color: Colors.blue.shade50, // Màu xanh nhạt
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: Colors.blue.shade200, width: 1),
+                              ),
+                              child: Row(
                                 children: [
-                                  Text(
-                                    'Tên: ${account.username}',
-                                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                  Expanded(
+                                    child: Text(
+                                      'Tên: ${account.username}',
+                                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                    ),
                                   ),
-                                  const SizedBox(height: 4),
+                                  const SizedBox(width: 12),
                                   Text(
-                                    'Quyền: ${displayPermissions.isEmpty ? 'Không có' : displayPermissions.join(', ')}',
-                                    style: const TextStyle(fontSize: 14),
+                                    'DS: ${_formatNumber(account.doanhso)} Đ',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                      color: Colors.blue.shade700,
+                                    ),
                                   ),
                                 ],
                               ),
                             ),
-                            Column(
+                            const SizedBox(height: 8),
+                            // Quyền
+                            Text(
+                              'Quyền: ${displayPermissions.isEmpty ? 'Không có' : displayPermissions.join(', ')}',
+                              style: const TextStyle(fontSize: 14),
+                            ),
+                            const SizedBox(height: 8),
+                            // ✅ Hàng nút: Edit, Delete, Reset doanh số
+                            Row(
                               children: [
+                                ElevatedButton.icon(
+                                  onPressed: () => resetDoanhso(account.id, account.username),
+                                  icon: const Icon(Icons.refresh, size: 18),
+                                  label: const Text('Reset doanh số'),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.orange,
+                                    foregroundColor: Colors.white,
+                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                  ),
+                                ),
+                                const Spacer(),
                                 IconButton(
                                   icon: const Icon(Icons.edit, color: Colors.blue),
                                   onPressed: () => editSubAccount(account),

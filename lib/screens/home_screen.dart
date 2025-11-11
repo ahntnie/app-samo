@@ -18,6 +18,7 @@ import 'excel_report_screen.dart';
 import 'orders_screen.dart';
 import 'categories_screen.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:intl/intl.dart';
 import '../helpers/global_cache_manager.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -46,6 +47,7 @@ class _HomeScreenState extends State<HomeScreen> {
   List<String> permissions = [];
   bool isSubAccountLoggedIn = false;
   String? loggedInUsername;
+  double? loggedInDoanhso;
   bool isPasswordHidden = true;
   bool rememberMe = true;
   bool isAutoLoginInProgress = false; // ✅ Flag để biết đang auto-login
@@ -127,6 +129,7 @@ class _HomeScreenState extends State<HomeScreen> {
       tenantUrl: widget.tenantUrl,
       tenantAnonKey: widget.tenantAnonKey,
       shouldGetFCMToken: widget.isFirstLogin, // ✅ CHỈ lấy token khi đăng nhập lần đầu
+      permissions: permissions, // ✅ Truyền quyền để gate thông báo
     );
   }
 
@@ -196,7 +199,7 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final response = await widget.tenantClient
           .from('sub_accounts')
-          .select('id, username, password_hash, permissions')
+          .select('id, username, password_hash, permissions, doanhso')
           .eq('username', usernameController.text.trim())
           .maybeSingle();
 
@@ -243,8 +246,12 @@ class _HomeScreenState extends State<HomeScreen> {
         print('✅ Saved credentials for auto-login: ${usernameController.text.trim()}');
       }
       
+      // Fetch doanhso
+      final doanhsoValue = double.tryParse(response['doanhso']?.toString() ?? '0') ?? 0;
+      
       setState(() {
         loggedInUsername = response['username'].toString();
+        loggedInDoanhso = doanhsoValue;
         permissions = userPermissions;
         print('Permissions set for user $loggedInUsername: $permissions');
         isSubAccountLoggedIn = true;
@@ -258,6 +265,10 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  String _formatNumber(double value) {
+    return NumberFormat('#,###', 'vi_VN').format(value).replaceAll(',', '.');
+  }
+
   Future<void> _logoutSubAccount() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('has_database_session', false);
@@ -268,6 +279,7 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() {
       isSubAccountLoggedIn = false;
       loggedInUsername = null;
+      loggedInDoanhso = null;
       permissions = [];
       usernameController.clear();
       passwordController.clear();
@@ -483,9 +495,48 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFFF6F9FF),
       appBar: AppBar(
-        title: const Text(
-            'Home',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        centerTitle: true, // ✅ Căn giữa title trong AppBar
+        title: loggedInUsername != null
+            ? Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // ✅ Container 1: Tài khoản (màu vàng)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.amber.shade700,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      'Tài Khoản : $loggedInUsername',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8), // ✅ Khoảng cách giữa 2 container
+                  // ✅ Container 2: Doanh số (màu xanh lá)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.green.shade700,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      'Doanh Số : ${_formatNumber(loggedInDoanhso ?? 0)} đ',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                ],
+              )
+            : const Text('Home', style: TextStyle(color: Colors.white)),
         backgroundColor: Colors.black,
         iconTheme: const IconThemeData(color: Colors.white),
         elevation: 4,
@@ -524,14 +575,20 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
-      body: Center(
+      body: RefreshIndicator(
+        onRefresh: _refreshDoanhso,
+        child: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
         child: GridView.count(
-          padding: const EdgeInsets.all(16),
           crossAxisCount: 3,
           crossAxisSpacing: 16,
           mainAxisSpacing: 16,
           childAspectRatio: 1.0,
           shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
           children: [
             _buildIconButton(context, Icons.dashboard, 'Tổng quan', () {
               Navigator.push(
@@ -692,8 +749,32 @@ class _HomeScreenState extends State<HomeScreen> {
                 );
               }, Colors.cyan),
           ],
+              ),
+            ),
+          ),
         ),
       ),
     );
+  }
+
+  Future<void> _refreshDoanhso() async {
+    if (loggedInUsername == null) return;
+    
+    try {
+      final response = await widget.tenantClient
+          .from('sub_accounts')
+          .select('doanhso')
+          .eq('username', loggedInUsername!)
+          .maybeSingle();
+
+      if (response != null && mounted) {
+        final doanhsoValue = double.tryParse(response['doanhso']?.toString() ?? '0') ?? 0;
+        setState(() {
+          loggedInDoanhso = doanhsoValue;
+        });
+      }
+    } catch (e) {
+      print('Error refreshing doanhso: $e');
+    }
   }
 }

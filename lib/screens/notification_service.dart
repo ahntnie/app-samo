@@ -12,16 +12,19 @@ class NotificationService {
   static late SupabaseClient _tenantClient;
   static String? _tenantUrl;
   static String? _tenantAnonKey;
+  static List<String> _permissions = const [];
 
   static Future<void> init(
     SupabaseClient tenantClient, {
     String? tenantUrl,
     String? tenantAnonKey,
     bool shouldGetFCMToken = false, // ✅ Chỉ lấy token khi đăng nhập lần đầu
+    List<String> permissions = const [], // ✅ Truyền quyền để gate thông báo
   }) async {
     _tenantClient = tenantClient;
     _tenantUrl = tenantUrl;
     _tenantAnonKey = tenantAnonKey;
+    _permissions = permissions;
     tz.initializeTimeZones();
     final vietnam = tz.getLocation('Asia/Ho_Chi_Minh');
     tz.setLocalLocation(vietnam);
@@ -125,7 +128,8 @@ class NotificationService {
       print('⏭️ Skip FCM token retrieval (already logged in)');
     }
 
-    // Lập lịch thông báo định kỳ
+    // Lập lịch thông báo định kỳ (gate theo quyền)
+    if (_permissions.contains('access_customers_screen')) {
     await scheduleDailyNotification(
       1,
       "Nhắc Thu Hồi Công Nợ",
@@ -134,6 +138,7 @@ class NotificationService {
       0,
       checkDebtReminders,
     );
+    }
 
     await scheduleDailyNotification(
       2,
@@ -152,6 +157,18 @@ class NotificationService {
       0,
       checkNoSalesToday,
     );
+
+    // ✅ Thêm nhắc nợ Nhà Cung Cấp lúc 16:00, chỉ khi có quyền xem nhà cung cấp
+    if (_permissions.contains('access_suppliers_screen')) {
+      await scheduleDailyNotification(
+        4,
+        "Nhắc Công Nợ Nhà Cung Cấp",
+        "Kiểm tra công nợ nhà cung cấp",
+        16,
+        0,
+        checkSupplierDebtReminders,
+      );
+    }
   }
 
   static void updateAppState(bool isForeground) {
@@ -167,14 +184,12 @@ class NotificationService {
   }) async {
     try {
       print('Sending notification to all devices: $title - $body');
-
+      
       if (_tenantUrl == null || _tenantAnonKey == null) {
-        print(
-          'Error: Tenant credentials not set. Call NotificationService.init() first.',
-        );
+        print('Error: Tenant credentials not set. Call NotificationService.init() first.');
         return;
       }
-
+      
       // Gọi Edge Function từ main Supabase project (không phải tenant)
       final mainClient = Supabase.instance.client;
       final response = await mainClient.functions.invoke(
@@ -192,9 +207,7 @@ class NotificationService {
         final result = response.data;
         print('Notification sent successfully: ${jsonEncode(result)}');
       } else {
-        print(
-          'Error sending notification: ${response.status} - ${response.data}',
-        );
+        print('Error sending notification: ${response.status} - ${response.data}');
       }
     } catch (e) {
       print('Exception sending notification to all devices: $e');
@@ -239,7 +252,7 @@ class NotificationService {
             badge: true,
             sound: true,
           );
-
+          
       const AndroidNotificationDetails androidPlatformChannelSpecifics =
           AndroidNotificationDetails(
             'high_importance_channel',
@@ -299,8 +312,6 @@ class NotificationService {
     Function callback,
   ) async {
     await _flutterLocalNotificationsPlugin.zonedSchedule(
-      uiLocalNotificationDateInterpretation:
-          UILocalNotificationDateInterpretation.absoluteTime,
       id,
       title,
       body,
@@ -410,12 +421,51 @@ class NotificationService {
     }
   }
 
+  // ✅ Kiểm tra công nợ Nhà Cung Cấp theo từng loại tiền
+  static Future<void> checkSupplierDebtReminders() async {
+    try {
+      // Gate lần nữa phòng khi quyền thay đổi runtime
+      if (!_permissions.contains('access_suppliers_screen')) return;
+
+      final suppliers = await _tenantClient
+          .from('suppliers')
+          .select('name, debt_vnd, debt_cny, debt_usd');
+
+      if (suppliers.isEmpty) return;
+
+      int notificationId = 5000;
+      for (final s in suppliers) {
+        final name = (s['name'] ?? '').toString();
+        num vnd = num.tryParse(s['debt_vnd']?.toString() ?? '0') ?? 0;
+        num cny = num.tryParse(s['debt_cny']?.toString() ?? '0') ?? 0;
+        num usd = num.tryParse(s['debt_usd']?.toString() ?? '0') ?? 0;
+
+        // Chỉ thông báo nếu còn nợ ở ít nhất một loại tiền
+        final List<String> parts = [];
+        if (vnd != 0) parts.add('${vnd.toString()} VND');
+        if (cny != 0) parts.add('${cny.toString()} CNY');
+        if (usd != 0) parts.add('${usd.toString()} USD');
+        if (parts.isEmpty) continue;
+
+        final message = 'Nhà cung cấp $name còn nợ ${parts.join(", ")}.';
+        await showNotification(
+          notificationId++,
+          "Nhắc Công Nợ Nhà Cung Cấp",
+          message,
+          'supplier_debt_reminder',
+        );
+      }
+    } catch (e) {
+      print('Error in checkSupplierDebtReminders: $e');
+    }
+  }
+
   static Future<void> checkOverdueProducts() async {
     final now = DateTime.now();
 
     final response = await _tenantClient
         .from('products')
-        .select('name, import_transfer_date')
+        .select('name, imei, import_transfer_date')
         .not('import_transfer_date', 'is', null)
         .not('status', 'eq', 'Đã bán');
 
@@ -437,9 +487,11 @@ class NotificationService {
       if (daysSinceImport > 7) {
         final productName = product['name'] as String?;
         if (productName == null) continue;
+        final imei = (product['imei']?.toString() ?? '').trim();
+        final imeiDisplay = imei.isEmpty ? 'N/A' : imei;
         final title = "Nhắc Bán Sản Phẩm";
         final message =
-            "Sản phẩm $productName đã nhập kho $daysSinceImport ngày. Bán nhanh kẻo lỗ chết bây giờ";
+            "Sản phẩm $productName IMEI $imeiDisplay đã tồn kho $daysSinceImport ngày. bán nhanh kẻo lỗ chết mẹ bây giờ";
 
         await showNotification(
           notificationId++,

@@ -579,16 +579,8 @@ class _TransferLocalFormState extends State<TransferLocalForm> {
   // Show confirmation dialog
   void showConfirmDialog() {
     if (isSubmitting) return;
-    
-    // Set isSubmitting ngay để ngăn double-submit
-    setState(() {
-      isSubmitting = true;
-    });
 
     if (transporter == null || productId == null || imeiList.isEmpty) {
-      setState(() {
-        isSubmitting = false;
-      });
       showDialog(
         context: context,
         builder: (context) => AlertDialog(
@@ -606,9 +598,6 @@ class _TransferLocalFormState extends State<TransferLocalForm> {
     }
 
     if (imeiList.length > maxImeiQuantity) {
-      setState(() {
-        isSubmitting = false;
-      });
       showDialog(
         context: context,
         builder: (context) => AlertDialog(
@@ -648,7 +637,7 @@ class _TransferLocalFormState extends State<TransferLocalForm> {
             child: const Text('Sửa lại'),
           ),
           ElevatedButton(
-            onPressed: isSubmitting ? null : () async {
+            onPressed: () async {
               Navigator.pop(dialogContext);
               await saveTransfer(imeiList);
             },
@@ -750,6 +739,13 @@ class _TransferLocalFormState extends State<TransferLocalForm> {
         "Đã tạo phiếu vận chuyển nội địa",
         "Đã tạo phiếu vận chuyển nội địa sản phẩm ${CacheUtil.getProductName(productId)} số lượng ${formatNumberLocal(imeiList.length)}",
         'transfer_local_created',
+      );
+      
+      // ✅ Gửi thông báo push đến tất cả thiết bị
+      await NotificationService.sendNotificationToAll(
+        "Đã tạo phiếu vận chuyển nội địa",
+        "Đã tạo phiếu vận chuyển nội địa sản phẩm ${CacheUtil.getProductName(productId)} số lượng ${formatNumberLocal(imeiList.length)}",
+        data: {'type': 'transfer_local_created'},
       );
 
       if (mounted) {

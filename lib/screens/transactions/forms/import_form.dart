@@ -147,15 +147,16 @@ class _ImportFormState extends State<ImportForm> {
         ..sort((a, b) => (a['name'] as String).toLowerCase().compareTo((b['name'] as String).toLowerCase()));
 
       final supplierResponse = await retry(
-            () => supabase.from('suppliers').select('id, name'),
+            () => supabase.from('suppliers').select('id, name, phone'),
         operation: 'Fetch suppliers',
       );
       final supplierList = supplierResponse
           .map((e) {
         final id = e['id']?.toString();
         final name = e['name'] as String?;
+        final phone = e['phone'] as String? ?? '';
         if (id != null && name != null) {
-          return {'id': id, 'name': name};
+          return {'id': id, 'name': name, 'phone': phone};
         }
         return null;
       })
@@ -1299,6 +1300,13 @@ class _ImportFormState extends State<ImportForm> {
                     'Đã nhập hàng "${CacheUtil.getProductName(currentProductId)}" số lượng ${formatNumberLocal(currentImeiListLength)} chiếc',
                     'import_created',
                   );
+                  
+                  // ✅ Gửi thông báo push đến tất cả thiết bị
+                  await NotificationService.sendNotificationToAll(
+                    'Phiếu Nhập Hàng Đã Tạo',
+                    'Đã nhập hàng "${CacheUtil.getProductName(currentProductId)}" số lượng ${formatNumberLocal(currentImeiListLength)} chiếc',
+                    data: {'type': 'import_created'},
+                  );
 
                   if (mounted) {
                     // Reset all fields
@@ -1489,12 +1497,37 @@ class _ImportFormState extends State<ImportForm> {
                           optionsBuilder: (textEditingValue) {
                             final query = textEditingValue.text.toLowerCase();
                             final filtered = suppliers
-                                .where((e) => (e['name'] as String).toLowerCase().contains(query))
+                                .where((e) {
+                                  final name = (e['name'] as String).toLowerCase();
+                                  final phone = (e['phone'] as String? ?? '').toLowerCase();
+                                  return name.contains(query) || phone.contains(query);
+                                })
                                 .toList()
-                              ..sort((a, b) => (a['name'] as String).toLowerCase().compareTo((b['name'] as String).toLowerCase()));
-                            return filtered.isNotEmpty ? filtered.take(10).toList() : [{'id': '', 'name': 'Không tìm thấy nhà cung cấp'}];
+                              ..sort((a, b) {
+                                final aName = (a['name'] as String).toLowerCase();
+                                final bName = (b['name'] as String).toLowerCase();
+                                // Ưu tiên khớp theo tên trước
+                                final aNameMatch = aName.contains(query);
+                                final bNameMatch = bName.contains(query);
+                                if (aNameMatch != bNameMatch) {
+                                  return aNameMatch ? -1 : 1;
+                                }
+                                // Nếu đều khớp theo phone, ưu tiên tên
+                                if (!aNameMatch && !bNameMatch) {
+                                  return aName.compareTo(bName);
+                                }
+                                return aName.compareTo(bName);
+                              });
+                            return filtered.isNotEmpty ? filtered.take(10).toList() : [{'id': '', 'name': 'Không tìm thấy nhà cung cấp', 'phone': ''}];
                           },
-                          displayStringForOption: (option) => option['name'] as String,
+                          displayStringForOption: (option) {
+                            final name = option['name'] as String;
+                            final phone = option['phone'] as String? ?? '';
+                            if (phone.isNotEmpty) {
+                              return '$name - $phone';
+                            }
+                            return name;
+                          },
                           onSelected: (val) {
                             if (val['id'].isNotEmpty) {
                               setState(() {

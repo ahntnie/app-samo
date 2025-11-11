@@ -247,6 +247,13 @@ class _TransferFundFormState extends State<TransferFundForm> {
         "Đã tạo phiếu chuyển quỹ cho $fromAccountName với số tiền ${formatNumberLocal(amount)} ${fromAcc['currency']}",
         'transfer_fund_created',
       );
+      
+      // ✅ Gửi thông báo push đến tất cả thiết bị
+      await NotificationService.sendNotificationToAll(
+        "Phiếu Chuyển Quỹ Đã Tạo",
+        "Đã tạo phiếu chuyển quỹ cho $fromAccountName với số tiền ${formatNumberLocal(amount)} ${fromAcc['currency']}",
+        data: {'type': 'transfer_fund_created'},
+      );
 
       await widget.tenantClient
           .from('financial_accounts')

@@ -753,6 +753,13 @@ class _ReturnSummaryState extends State<ReturnSummary> {
         'Đã trả hàng sản phẩm $firstProductName số lượng $totalQuantity',
         'return_created',
       );
+      
+      // ✅ Gửi thông báo push đến tất cả thiết bị
+      await NotificationService.sendNotificationToAll(
+        'Phiếu Trả Hàng Đã Tạo',
+        'Đã trả hàng sản phẩm $firstProductName số lượng $totalQuantity',
+        data: {'type': 'return_created'},
+      );
 
       if (mounted) {
         Navigator.pop(scaffoldContext); // Đóng dialog "Đang xử lý"

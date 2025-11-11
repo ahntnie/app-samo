@@ -1,8 +1,6 @@
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide Border, BorderStyle;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:excel/excel.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:open_file/open_file.dart';
 import 'dart:io';
 import 'dart:async';
@@ -13,6 +11,8 @@ import 'package:barcode/barcode.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
 import '../helpers/global_cache_manager.dart';
+import '../helpers/storage_helper.dart';
+import '../helpers/excel_style_helper.dart';
 
 // Backward compatibility alias
 class CacheUtil {
@@ -68,6 +68,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
   String _defaultPrintType = 'a4'; // 'a4' hoặc 'thermal'
   int _defaultLabelsPerRow = 1; // 1, 2, hoặc 3
   int _defaultLabelHeight = 30; // 20, 25, 30, 40mm
+  bool _hasDefaultSettings = false; // Đã có cài đặt mặc định chưa
 
   @override
   void initState() {
@@ -96,6 +97,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
         _defaultPrintType = prefs.getString('default_print_type') ?? 'a4';
         _defaultLabelsPerRow = prefs.getInt('default_labels_per_row') ?? 1;
         _defaultLabelHeight = prefs.getInt('default_label_height') ?? 30;
+        _hasDefaultSettings = prefs.getBool('has_default_print_settings') ?? false;
       });
     } catch (e) {
       // Ignore errors, use defaults
@@ -108,6 +110,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
       await prefs.setString('default_print_type', printType);
       await prefs.setInt('default_labels_per_row', labelsPerRow);
       await prefs.setInt('default_label_height', labelHeight);
+      await prefs.setBool('has_default_print_settings', true);
+      setState(() {
+        _hasDefaultSettings = true;
+      });
     } catch (e) {
       // Ignore errors
     }
@@ -394,8 +400,19 @@ class _InventoryScreenState extends State<InventoryScreen> {
     }
   }
 
-  Future<void> _printLabels() async {
-    // Hiển thị dialog đơn giản với option ghi nhớ
+  Future<void> _printLabels({bool showSettings = false}) async {
+    String printType;
+    int labelsPerRow;
+    int labelHeight;
+    bool saveAsDefault = false;
+
+    // Nếu đã có cài đặt mặc định và không bắt buộc hiển thị settings, dùng luôn
+    if (_hasDefaultSettings && !showSettings) {
+      printType = _defaultPrintType;
+      labelsPerRow = _defaultLabelsPerRow;
+      labelHeight = _defaultLabelHeight;
+    } else {
+      // Hiển thị dialog cài đặt
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
       builder: (context) => AlertDialog(
@@ -412,10 +429,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
     if (result == null) return;
 
-    final printType = result['printType'] as String;
-    final labelsPerRow = result['labelsPerRow'] as int;
-    final labelHeight = result['labelHeight'] as int;
-    final saveAsDefault = result['saveAsDefault'] as bool;
+      printType = result['printType'] as String;
+      labelsPerRow = result['labelsPerRow'] as int;
+      labelHeight = result['labelHeight'] as int;
+      saveAsDefault = result['saveAsDefault'] as bool;
 
     // Lưu cài đặt nếu user chọn
     if (saveAsDefault) {
@@ -425,8 +442,13 @@ class _InventoryScreenState extends State<InventoryScreen> {
         _defaultLabelsPerRow = labelsPerRow;
         _defaultLabelHeight = labelHeight;
       });
+      }
     }
 
+    await _executePrint(printType, labelsPerRow, labelHeight);
+  }
+
+  Future<void> _executePrint(String printType, int labelsPerRow, int labelHeight) async {
     try {
       // Lấy dữ liệu đã lọc
       var query = widget.tenantClient
@@ -585,6 +607,11 @@ class _InventoryScreenState extends State<InventoryScreen> {
       }
 
       // Hiển thị preview và in
+      // Lưu ý: Để máy in CLabel CT221B xuất hiện trong danh sách,
+      // cần cài đặt driver máy in trên hệ thống (Settings > Printers & scanners)
+      // hoặc kết nối qua Bluetooth/USB và cài driver từ nhà sản xuất.
+      // Nếu chỉ kết nối qua app riêng mà chưa cài driver hệ thống, 
+      // máy in sẽ không xuất hiện trong dialog in của hệ điều hành.
       await Printing.layoutPdf(
         onLayout: (format) async => pdf.save(),
         name: 'Tem_Nhan_IMEI_${DateTime.now().millisecondsSinceEpoch}.pdf',
@@ -635,6 +662,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
       maxLines = 2;
     }
 
+    // Tăng độ rõ: phóng to mã vạch và số IMEI
+    final enlargedImeiFontSize = imeiFontSize * 2; // gấp đôi cỡ chữ IMEI
+    final enlargedBarcodeHeight = barcodeHeight * 1.8; // tăng chiều cao mã vạch ~80%
+
     return pw.Container(
       decoration: pw.BoxDecoration(
         border: pw.Border.all(color: PdfColors.black, width: 0.5),
@@ -659,13 +690,13 @@ class _InventoryScreenState extends State<InventoryScreen> {
           pw.SizedBox(height: 1),
           // Mã vạch
           pw.Container(
-            height: barcodeHeight,
+            height: enlargedBarcodeHeight,
             padding: const pw.EdgeInsets.symmetric(horizontal: 2),
             child: pw.BarcodeWidget(
               barcode: barcodeGen,
               data: imei,
               drawText: false,
-              width: 36,
+              width: 95, // tăng gấp đôi chiều ngang để vạch tách rõ hơn
             ),
           ),
           pw.SizedBox(height: 1),
@@ -673,7 +704,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
           pw.Text(
             imei,
             style: pw.TextStyle(
-              fontSize: imeiFontSize,
+              fontSize: enlargedImeiFontSize,
             ),
             textAlign: pw.TextAlign.center,
           ),
@@ -711,7 +742,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
           pw.SizedBox(height: 8),
           // Mã vạch
           pw.Container(
-            height: 60,
+            height: 100, // tăng chiều cao mã vạch để nét rõ hơn
             child: pw.BarcodeWidget(
               barcode: barcodeGen,
               data: imei,
@@ -723,7 +754,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
           pw.Text(
             imei,
             style: const pw.TextStyle(
-              fontSize: 10,
+              fontSize: 18, // tăng gấp đôi kích thước chữ IMEI
             ),
             textAlign: pw.TextAlign.center,
           ),
@@ -761,8 +792,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
     await Future.delayed(Duration.zero);
 
     try {
-      var status = await Permission.storage.request();
-      if (!status.isGranted) {
+      // Kiểm tra và yêu cầu quyền lưu trữ (nếu cần) - Android 13+ không cần
+      final hasPermission = await StorageHelper.requestStoragePermissionIfNeeded();
+      if (!hasPermission) {
         if (mounted) {
           Navigator.pop(context);
           ScaffoldMessenger.of(context).showSnackBar(
@@ -846,34 +878,48 @@ class _InventoryScreenState extends State<InventoryScreen> {
       Sheet sheet = excel['TonKho']; // ✅ Tạo sheet mới trước
       excel.delete('Sheet1'); // ✅ Xóa sheet mặc định sau
 
-      List<TextCellValue> headers = [
-        TextCellValue('Số thứ tự'),
-        TextCellValue('Tên sản phẩm'),
-        TextCellValue('IMEI'),
-        if (widget.permissions.contains('view_import_price')) TextCellValue('Giá nhập'),
-        if (widget.permissions.contains('view_import_price')) TextCellValue('Đơn vị tiền nhập'),
-        if (widget.permissions.contains('view_cost_price')) TextCellValue('Giá vốn'),
-        TextCellValue('Ngày gửi sửa'),
-        TextCellValue('Trạng thái'),
-        TextCellValue('Kho'),
-        TextCellValue('Ngày nhập'),
-        TextCellValue('Ngày trả hàng'),
-        TextCellValue('Tiền fix lỗi'),
-        TextCellValue('Cước vận chuyển'),
-        TextCellValue('Đơn vị vận chuyển'),
-        TextCellValue('Ngày chuyển kho'),
-        TextCellValue('Ngày nhập kho'),
-        if (widget.permissions.contains('view_sale_price')) TextCellValue('Giá bán'),
-        if (widget.permissions.contains('view_customer')) TextCellValue('Khách hàng'),
-        TextCellValue('Tiền cọc'),
-        TextCellValue('Tiền COD'),
-        TextCellValue('Ngày bán'),
-        if (widget.permissions.contains('view_supplier')) TextCellValue('Nhà cung cấp'),
-        TextCellValue('Ghi chú'),
+      final headerLabels = <String>[
+        'Số thứ tự',
+        'Tên sản phẩm',
+        'IMEI',
+        if (widget.permissions.contains('view_import_price')) 'Giá nhập',
+        if (widget.permissions.contains('view_import_price')) 'Đơn vị tiền nhập',
+        if (widget.permissions.contains('view_cost_price')) 'Giá vốn',
+        'Ngày gửi sửa',
+        'Trạng thái',
+        'Kho',
+        'Ngày nhập',
+        'Ngày trả hàng',
+        'Tiền fix lỗi',
+        'Cước vận chuyển',
+        'Đơn vị vận chuyển',
+        'Ngày chuyển kho',
+        'Ngày nhập kho',
+        if (widget.permissions.contains('view_sale_price')) 'Giá bán',
+        if (widget.permissions.contains('view_customer')) 'Khách hàng',
+        'Tiền cọc',
+        'Tiền COD',
+        'Ngày bán',
+        if (widget.permissions.contains('view_supplier')) 'Nhà cung cấp',
+        'Ghi chú',
       ];
 
-      sheet.appendRow(headers);
+      sheet.appendRow(headerLabels.map(TextCellValue.new).toList());
+      final columnCount = headerLabels.length;
+      final sizingTracker = ExcelSizingTracker(columnCount);
+      final styles = ExcelCellStyles.build();
 
+      for (int col = 0; col < columnCount; col++) {
+        final cell = sheet.cell(
+          CellIndex.indexByColumnRow(columnIndex: col, rowIndex: 0),
+        );
+        cell.cellStyle = styles.header;
+        sizingTracker.update(0, col, headerLabels[col]);
+      }
+
+      const multilineHeaders = {'IMEI', 'Ghi chú'};
+
+      var currentRowIndex = 1;
       for (int i = 0; i < allItems.length; i++) {
         final item = allItems[i];
         final productId = item['product_id']?.toString() ?? '';
@@ -889,43 +935,63 @@ class _InventoryScreenState extends State<InventoryScreen> {
           supplier = supplierId != null ? CacheUtil.getSupplierName(supplierId) : null;
         }
 
-        List<TextCellValue> row = [
-          TextCellValue((i + 1).toString()),
-          TextCellValue(CacheUtil.getProductName(productId)),
-          TextCellValue(imei),
-          if (widget.permissions.contains('view_import_price')) TextCellValue(item['import_price']?.toString() ?? ''),
-          if (widget.permissions.contains('view_import_price')) TextCellValue(item['import_currency']?.toString() ?? ''),
-          if (widget.permissions.contains('view_cost_price')) TextCellValue(item['cost_price']?.toString() ?? ''),
-          TextCellValue(item['send_fix_date']?.toString() ?? ''),
-          TextCellValue(item['status']?.toString() ?? ''),
-          TextCellValue(CacheUtil.getWarehouseName(item['warehouse_id']?.toString())),
-          TextCellValue(item['import_date']?.toString() ?? ''),
-          TextCellValue(item['return_date']?.toString() ?? ''),
-          TextCellValue(item['fix_price']?.toString() ?? ''),
-          TextCellValue(item['transport_fee']?.toString() ?? ''),
-          TextCellValue(item['transporter']?.toString() ?? ''),
-          TextCellValue(item['send_transfer_date']?.toString() ?? ''),
-          TextCellValue(item['import_transfer_date']?.toString() ?? ''),
-          if (widget.permissions.contains('view_sale_price')) TextCellValue(item['sale_price']?.toString() ?? ''),
-          if (widget.permissions.contains('view_customer')) TextCellValue(customer ?? ''),
-          TextCellValue(item['customer_price']?.toString() ?? ''),
-          TextCellValue(item['transporter_price']?.toString() ?? ''),
-          TextCellValue(item['sale_date']?.toString() ?? ''),
-          if (widget.permissions.contains('view_supplier')) TextCellValue(supplier ?? ''),
-          TextCellValue(item['note']?.toString() ?? ''),
+        final rowValues = <String>[
+          (i + 1).toString(),
+          CacheUtil.getProductName(productId),
+          imei,
+          if (widget.permissions.contains('view_import_price')) item['import_price']?.toString() ?? '',
+          if (widget.permissions.contains('view_import_price')) item['import_currency']?.toString() ?? '',
+          if (widget.permissions.contains('view_cost_price')) item['cost_price']?.toString() ?? '',
+          item['send_fix_date']?.toString() ?? '',
+          item['status']?.toString() ?? '',
+          CacheUtil.getWarehouseName(item['warehouse_id']?.toString()),
+          item['import_date']?.toString() ?? '',
+          item['return_date']?.toString() ?? '',
+          item['fix_price']?.toString() ?? '',
+          item['transport_fee']?.toString() ?? '',
+          item['transporter']?.toString() ?? '',
+          item['send_transfer_date']?.toString() ?? '',
+          item['import_transfer_date']?.toString() ?? '',
+          if (widget.permissions.contains('view_sale_price')) item['sale_price']?.toString() ?? '',
+          if (widget.permissions.contains('view_customer')) customer ?? '',
+          item['customer_price']?.toString() ?? '',
+          item['transporter_price']?.toString() ?? '',
+          item['sale_date']?.toString() ?? '',
+          if (widget.permissions.contains('view_supplier')) supplier ?? '',
+          item['note']?.toString() ?? '',
         ];
 
-        sheet.appendRow(row);
+        sheet.appendRow(rowValues.map(TextCellValue.new).toList());
+
+        for (int col = 0; col < columnCount; col++) {
+          final cell = sheet.cell(
+            CellIndex.indexByColumnRow(columnIndex: col, rowIndex: currentRowIndex),
+          );
+          final headerLabel = headerLabels[col];
+          final value = rowValues[col];
+          final isMultiline = multilineHeaders.contains(headerLabel);
+          cell.cellStyle = isMultiline ? styles.multiline : styles.centered;
+          sizingTracker.update(currentRowIndex, col, value);
+        }
+
+        currentRowIndex++;
       }
 
-      Directory downloadsDir;
-      if (Platform.isAndroid) {
-        downloadsDir = Directory('/storage/emulated/0/Download');
-        if (!await downloadsDir.exists()) {
-          await downloadsDir.create(recursive: true);
+      sizingTracker.applyToSheet(sheet);
+
+      // Sử dụng StorageHelper để lấy thư mục Downloads (hỗ trợ Android 13+)
+      final downloadsDir = await StorageHelper.getDownloadDirectory();
+      if (downloadsDir == null) {
+        if (mounted) {
+          Navigator.pop(context);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Không thể truy cập thư mục Downloads')),
+          );
         }
-      } else {
-        downloadsDir = await getTemporaryDirectory();
+        setState(() {
+          isExporting = false;
+        });
+        return;
       }
 
       final now = DateTime.now();
@@ -1301,13 +1367,16 @@ class _InventoryScreenState extends State<InventoryScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                FloatingActionButton.extended(
+                GestureDetector(
+                  onLongPress: () => _printLabels(showSettings: true),
+                  child: FloatingActionButton.extended(
                   onPressed: _printLabels,
                   label: const Text('In Tem'),
                   icon: const Icon(Icons.print),
                   backgroundColor: Colors.green,
                   foregroundColor: Colors.white,
                   heroTag: 'print_btn',
+                  ),
                 ),
                 const SizedBox(height: 12),
                 FloatingActionButton.extended(

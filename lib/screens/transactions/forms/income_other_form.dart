@@ -189,7 +189,14 @@ class _IncomeOtherFormState extends State<IncomeOtherForm> {
                       "Phiếu Thu Nhập Khác Đã Tạo",
                       "Đã tạo phiếu thu nhập khác cho $account với số tiền ${formatNumberLocal(amount!)} $currency",
                       'income_other_created',
-                  );
+                    );
+                    
+                    // ✅ Gửi thông báo push đến tất cả thiết bị
+                    await NotificationService.sendNotificationToAll(
+                      "Phiếu Thu Nhập Khác Đã Tạo",
+                      "Đã tạo phiếu thu nhập khác cho $account với số tiền ${formatNumberLocal(amount!)} $currency",
+                      data: {'type': 'income_other_created'},
+                    );
 
                 final newBalance = currentBalance + amount!;
                 await widget.tenantClient
