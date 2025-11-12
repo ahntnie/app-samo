@@ -110,22 +110,32 @@ class NotificationService {
       },
     );
 
-    // ✅ CHỈ lấy và lưu FCM token khi đăng nhập lần đầu tiên
-    if (shouldGetFCMToken) {
-      try {
-        final fcmToken = await FirebaseMessaging.instance.getToken();
-        print('✅ FCM token (first login): $fcmToken');
-        if (fcmToken != null) {
-          await _saveDeviceToken(fcmToken);
-        } else {
-          print('Không thể lấy FCM token');
-        }
-      } catch (e) {
-        print('Lỗi khi lấy FCM token: $e');
+    // Always try to get and save the FCM token for this device.
+    // Previously this was only done on first login; that caused other
+    // devices to never register their tokens and therefore not receive
+    // push notifications. _saveDeviceToken already deduplicates tokens,
+    // so calling this on each init is safe.
+    try {
+      final fcmToken = await FirebaseMessaging.instance.getToken();
+      print('FCM token: $fcmToken');
+      if (fcmToken != null) {
+        await _saveDeviceToken(fcmToken);
+      } else {
+        print('Không thể lấy FCM token');
       }
-    } else {
-      print('⏭️ Skip FCM token retrieval (already logged in)');
+    } catch (e) {
+      print('Lỗi khi lấy FCM token: $e');
     }
+
+    // Listen for token refresh and save updated tokens
+    FirebaseMessaging.instance.onTokenRefresh.listen((newToken) async {
+      try {
+        print('FCM token refreshed: $newToken');
+        if (newToken != null) await _saveDeviceToken(newToken);
+      } catch (e) {
+        print('Lỗi khi lưu FCM token mới: $e');
+      }
+    });
 
     // Lập lịch thông báo định kỳ (gate theo quyền)
     if (_permissions.contains('access_customers_screen')) {
