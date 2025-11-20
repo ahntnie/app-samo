@@ -54,7 +54,7 @@ class _PaymentFormState extends State<PaymentForm> {
 
   List<String> currencies = [];
   List<String> accounts = [];
-  List<String> partnerSuggestions = [];
+  List<Map<String, dynamic>> partnerData = []; // Lưu cả name, phone, id
   Map<String, String> partnerIdMap = {}; // Map name to id for suppliers
 
   final Map<String, String> partnerTypeLabels = {
@@ -142,24 +142,34 @@ class _PaymentFormState extends State<PaymentForm> {
 
   Future<void> loadPartners() async {
     try {
-      final selectColumns = (partnerType == 'suppliers' || partnerType == 'fix_units') ? 'id, name' : 'name';
+      // ✅ Select cả phone cho suppliers và fix_units
+      final selectColumns = (partnerType == 'suppliers' || partnerType == 'fix_units') ? 'id, name, phone' : 'name';
       final response = await widget.tenantClient
           .from(partnerType)
           .select(selectColumns);
       setState(() {
-        partnerSuggestions =
-            response
-                .map((e) => e['name'] as String?)
-                .where((e) => e != null)
-                .cast<String>()
-                .toList();
+        // ✅ Lưu dạng Map với name, phone, id
+        partnerData = response
+            .map((e) => <String, dynamic>{
+                  'id': (partnerType == 'suppliers' || partnerType == 'fix_units') 
+                      ? e['id']?.toString() 
+                      : null,
+                  'name': e['name'] as String? ?? '',
+                  'phone': (partnerType == 'suppliers' || partnerType == 'fix_units')
+                      ? (e['phone'] as String? ?? '')
+                      : '',
+                })
+            .where((e) => e['name'] != null && (e['name'] as String).isNotEmpty)
+            .toList()
+          ..sort((a, b) => (a['name'] as String).compareTo(b['name'] as String));
+        
         // Build id map for suppliers and fix units
         if (partnerType == 'suppliers' || partnerType == 'fix_units') {
           partnerIdMap = {};
-          for (var e in response) {
-            final name = e['name'] as String?;
-            final id = e['id']?.toString();
-            if (name != null && id != null) {
+          for (var e in partnerData) {
+            final name = e['name'] as String;
+            final id = e['id'] as String?;
+            if (name.isNotEmpty && id != null) {
               partnerIdMap[name] = id;
             }
           }
@@ -171,7 +181,7 @@ class _PaymentFormState extends State<PaymentForm> {
       });
     } catch (e) {
       setState(() {
-        partnerSuggestions = [];
+        partnerData = [];
         errorMessage = 'Không thể tải danh sách đối tác: $e';
       });
     }
@@ -374,7 +384,7 @@ class _PaymentFormState extends State<PaymentForm> {
             .eq('currency', currency!)
             .single();
 
-    final currentBalance = balanceData['balance'] ?? 0;
+    final currentBalance = double.tryParse(balanceData['balance']?.toString() ?? '0') ?? 0.0;
 
     if (currentBalance < amount) {
       await showDialog(
@@ -382,7 +392,7 @@ class _PaymentFormState extends State<PaymentForm> {
         builder:
             (context) => AlertDialog(
               title: const Text('Thông báo'),
-              content: const Text('Tài khoản không đủ tiền'),
+              content: const Text('Tiền trong tài khoản không đủ'),
               actions: [
                 TextButton(
                   onPressed: () => Navigator.pop(context),
@@ -652,8 +662,16 @@ class _PaymentFormState extends State<PaymentForm> {
                     onChanged: (val) async {
                       setState(() {
                         partnerType = val!;
+                        // ✅ Nếu là transporters, mặc định currency = 'VND'
+                        if (val == 'transporters') {
+                          currency = 'VND';
+                        }
                       });
                       await loadPartners();
+                      // ✅ Load accounts sau khi set currency
+                      if (val == 'transporters') {
+                        loadAccounts();
+                      }
                     },
                     decoration: const InputDecoration(
                       labelText: 'Loại đối tác',
@@ -666,30 +684,58 @@ class _PaymentFormState extends State<PaymentForm> {
                   Row(
                     children: [
                       Expanded(
-                        child: Autocomplete<String>(
+                        child: Autocomplete<Map<String, dynamic>>(
                           optionsBuilder: (textEditingValue) {
                             final query = textEditingValue.text.toLowerCase();
-                            return partnerSuggestions
-                                .where(
-                                  (option) =>
-                                      option.toLowerCase().contains(query),
-                                )
+                            if (query.isEmpty) return partnerData.take(10).toList();
+                            final filtered = partnerData
+                                .where((option) {
+                                  final name = (option['name'] as String).toLowerCase();
+                                  final phone = (option['phone'] as String? ?? '').toLowerCase();
+                                  return name.contains(query) || phone.contains(query);
+                                })
                                 .toList()
-                              ..sort(
-                                (a, b) => a
-                                    .toLowerCase()
-                                    .indexOf(query)
-                                    .compareTo(b.toLowerCase().indexOf(query)),
-                              )
-                              ..take(3);
-                          },
-                          onSelected:
-                              (val) => setState(() {
-                                partnerName = val;
-                                if (partnerType == 'suppliers' || partnerType == 'fix_units') {
-                                  partnerId = partnerIdMap[val];
+                              ..sort((a, b) {
+                                final aName = (a['name'] as String).toLowerCase();
+                                final bName = (b['name'] as String).toLowerCase();
+                                // Ưu tiên khớp theo tên trước
+                                final aNameMatch = aName.contains(query);
+                                final bNameMatch = bName.contains(query);
+                                if (aNameMatch != bNameMatch) {
+                                  return aNameMatch ? -1 : 1;
                                 }
-                              }),
+                                // Nếu đều khớp theo phone, ưu tiên tên
+                                if (!aNameMatch && !bNameMatch) {
+                                  return aName.compareTo(bName);
+                                }
+                                final aStartsWith = aName.startsWith(query);
+                                final bStartsWith = bName.startsWith(query);
+                                if (aStartsWith != bStartsWith) {
+                                  return aStartsWith ? -1 : 1;
+                                }
+                                return aName.compareTo(bName);
+                              });
+                            return filtered.isNotEmpty 
+                                ? filtered.take(10).toList() 
+                                : [{'id': null, 'name': 'Không tìm thấy đối tác', 'phone': ''}];
+                          },
+                          displayStringForOption: (option) {
+                            final name = option['name'] as String;
+                            final phone = option['phone'] as String? ?? '';
+                            if (phone.isNotEmpty) {
+                              return '$name - $phone';
+                            }
+                            return name;
+                          },
+                          onSelected: (val) {
+                            if (val['id'] == null && val['name'] == 'Không tìm thấy đối tác') return;
+                            setState(() {
+                              partnerName = val['name'] as String;
+                              if (partnerType == 'suppliers' || partnerType == 'fix_units') {
+                                partnerId = val['id'] as String?;
+                              }
+                            });
+                          },
                           fieldViewBuilder: (
                             context,
                             controller,
@@ -741,10 +787,12 @@ class _PaymentFormState extends State<PaymentForm> {
                             )
                             .toList(),
                     onChanged:
-                        (val) => setState(() {
-                          currency = val!;
-                          loadAccounts();
-                        }),
+                        partnerType == 'transporters' 
+                            ? null // ✅ Disable khi là transporters
+                            : (val) => setState(() {
+                              currency = val as String?;
+                              loadAccounts();
+                            }),
                     decoration: const InputDecoration(
                       labelText: 'Đơn vị tiền tệ',
                       border: InputBorder.none,

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart' hide Border, BorderStyle;
+import 'package:flutter/services.dart' show Clipboard, ClipboardData, rootBundle;
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:excel/excel.dart';
@@ -6,7 +7,17 @@ import 'package:open_file/open_file.dart';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:developer' as developer;
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
+import 'package:barcode/barcode.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../helpers/storage_helper.dart';
+import '../helpers/bluetooth_print_helper.dart';
+import 'customers_screen.dart';
+import 'suppliers_screen.dart';
+import 'transporters_screen.dart';
+import 'fixers_screen.dart';
 
 class HistoryScreen extends StatefulWidget {
   final List<String> permissions;
@@ -62,6 +73,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
   bool isLoadingMore = false;
   final ScrollController _scrollController = ScrollController();
 
+  // Cài đặt in tem (giống inventory_screen.dart)
+  String _defaultPrintType = 'a4';
+  int _defaultLabelsPerRow = 1;
+  int _defaultLabelHeight = 30;
+  bool _hasDefaultSettings = false;
+
   @override
   void initState() {
     super.initState();
@@ -72,6 +89,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
     }).toList();
 
     developer.log('init: User permissions: ${widget.permissions.join(', ')}');
+    _loadPrintSettings();
     _loadInitialData();
     _scrollController.addListener(() {
       if (_scrollController.position.pixels >=
@@ -92,6 +110,35 @@ class _HistoryScreenState extends State<HistoryScreen> {
     _dateFromController.dispose();
     _dateToController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadPrintSettings() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      setState(() {
+        _defaultPrintType = prefs.getString('default_print_type') ?? 'a4';
+        _defaultLabelsPerRow = prefs.getInt('default_labels_per_row') ?? 1;
+        _defaultLabelHeight = prefs.getInt('default_label_height') ?? 30;
+        _hasDefaultSettings = prefs.getBool('has_default_print_settings') ?? false;
+      });
+    } catch (e) {
+      // Ignore errors, use defaults
+    }
+  }
+
+  Future<void> _savePrintSettings(String printType, int labelsPerRow, int labelHeight) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('default_print_type', printType);
+      await prefs.setInt('default_labels_per_row', labelsPerRow);
+      await prefs.setInt('default_label_height', labelHeight);
+      await prefs.setBool('has_default_print_settings', true);
+      setState(() {
+        _hasDefaultSettings = true;
+      });
+    } catch (e) {
+      // Ignore errors
+    }
   }
 
   Future<void> _loadInitialData() async {
@@ -346,6 +393,27 @@ class _HistoryScreenState extends State<HistoryScreen> {
     return entries.join('\r\n');
   }
 
+  // Gom nhóm sản phẩm cùng loại theo product_name
+  List<Map<String, dynamic>> _groupProductsByName(List<dynamic> items) {
+    final Map<String, num> productGroups = {};
+    
+    for (var item in items) {
+      final productName = item['product_name']?.toString() ?? 'N/A';
+      final quantity = item['quantity'] as num? ?? 0;
+      
+      if (productName != 'N/A' && quantity > 0) {
+        productGroups[productName] = (productGroups[productName] ?? 0) + quantity;
+      }
+    }
+    
+    return productGroups.entries.map((entry) {
+      return {
+        'product_name': entry.key,
+        'total_quantity': entry.value,
+      };
+    }).toList();
+  }
+
   void _updateExcelMetrics({
     required Map<int, int> rowLineCounts,
     required List<double> maxColumnWidths,
@@ -418,7 +486,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 
 
-  String _getDisplayType(String type, String table) {
+  String _getDisplayType(String type, String table, {String? account}) {
     String typeKey = type;
     if (table == 'fix_receive_orders') {
       typeKey = 'fix_receive_orders';
@@ -427,6 +495,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
     } else if (table == 'import_orders') {
       typeKey = 'import_orders';
     } else if (table == 'reimport_orders') {
+      // Nếu account là "Cod hoàn" thì hiển thị "Cod Hoàn"
+      if (account != null && account == 'Cod hoàn') {
+        return 'Cod Hoàn';
+      }
       typeKey = 'reimport_orders';
     } else if (table == 'sale_orders') {
       typeKey = 'sale_orders';
@@ -505,7 +577,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         {
           'table': 'reimport_orders',
           'key': 'ticket_id',
-          'select': 'ticket_id, created_at, customer_id, price, quantity, currency, account, iscancelled, product_id, warehouse_id, imei, note',
+          'select': 'ticket_id, created_at, customer_id, price, quantity, currency, account, customer_price, transporter_price, transporter, iscancelled, product_id, warehouse_id, imei, note',
           'partnerField': 'customer_id',
           'amountField': 'price',
           'dateField': 'created_at',
@@ -646,28 +718,42 @@ class _HistoryScreenState extends State<HistoryScreen> {
           if (!groupedTickets.containsKey(ticketKey)) {
             // Lấy tên đối tác - đặc biệt xử lý cho các loại phiếu
             String partnerName;
+            String? partnerId;
+            String? partnerType;
+            
             if (tableName == 'financial_orders') {
+              partnerId = tx['partner_id']?.toString();
+              partnerType = tx['partner_type']?.toString();
               partnerName = _getPartnerName(
-                tx['partner_id']?.toString(),
-                tx['partner_type']?.toString(),
+                partnerId,
+                partnerType,
                 tx[partnerField]?.toString(),
               );
             } else if (tableName == 'import_orders' || tableName == 'return_orders') {
               // Nhà cung cấp - dùng supplier_id
-              final supplierId = tx[partnerField]?.toString();
-              partnerName = supplierId != null ? (supplierMap[supplierId] ?? 'N/A') : 'N/A';
+              partnerId = tx[partnerField]?.toString();
+              partnerType = 'suppliers';
+              partnerName = partnerId != null ? (supplierMap[partnerId] ?? 'N/A') : 'N/A';
             } else if (tableName == 'sale_orders' || tableName == 'reimport_orders') {
               // Khách hàng - dùng customer_id
-              final customerId = tx[partnerField]?.toString();
-              partnerName = customerId != null ? (customerMap[customerId] ?? 'N/A') : 'N/A';
+              partnerId = tx[partnerField]?.toString();
+              partnerType = 'customers';
+              partnerName = partnerId != null ? (customerMap[partnerId] ?? 'N/A') : 'N/A';
             } else if (tableName == 'fix_send_orders' || tableName == 'fix_receive_orders') {
               // Đơn vị fix - dùng fix_unit_id nếu có, nếu không dùng fixer (tên)
               final fixUnitId = tx['fix_unit_id']?.toString();
               if (fixUnitId != null) {
+                partnerId = fixUnitId;
+                partnerType = 'fix_units';
                 partnerName = fixerMap[fixUnitId] ?? 'N/A';
               } else {
                 partnerName = tx[partnerField]?.toString() ?? 'N/A';
+                partnerType = 'fix_units';
               }
+            } else if (tableName == 'transporter_orders') {
+              // Đơn vị vận chuyển - dùng transporter (tên)
+              partnerName = tx[partnerField]?.toString() ?? 'N/A';
+              partnerType = 'transporters';
             } else {
               partnerName = tx[partnerField]?.toString() ?? 'N/A';
             }
@@ -678,6 +764,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
               'id': ticketKey,
               'type': tableName == 'financial_orders' || tableName == 'transporter_orders' ? (tx['type'] ?? tableName) : tableName,
               'partner': partnerName,
+              'partner_id': partnerId,
+              'partner_type': partnerType,
               'date': tx[dateField]?.toString() ?? '',
               'snapshot_data': null,
               'snapshot_created_at': null,
@@ -694,28 +782,42 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
           // Lấy tên đối tác cho item - đặc biệt xử lý cho các loại phiếu
           String itemPartnerName;
+          String? itemPartnerId;
+          String? itemPartnerType;
+          
           if (tableName == 'financial_orders') {
+            itemPartnerId = tx['partner_id']?.toString();
+            itemPartnerType = tx['partner_type']?.toString();
             itemPartnerName = _getPartnerName(
-              tx['partner_id']?.toString(),
-              tx['partner_type']?.toString(),
+              itemPartnerId,
+              itemPartnerType,
               tx[partnerField]?.toString(),
             );
           } else if (tableName == 'import_orders' || tableName == 'return_orders') {
             // Nhà cung cấp - dùng supplier_id
-            final supplierId = tx[partnerField]?.toString();
-            itemPartnerName = supplierId != null ? (supplierMap[supplierId] ?? 'N/A') : 'N/A';
+            itemPartnerId = tx[partnerField]?.toString();
+            itemPartnerType = 'suppliers';
+            itemPartnerName = itemPartnerId != null ? (supplierMap[itemPartnerId] ?? 'N/A') : 'N/A';
           } else if (tableName == 'sale_orders' || tableName == 'reimport_orders') {
             // Khách hàng - dùng customer_id
-            final customerId = tx[partnerField]?.toString();
-            itemPartnerName = customerId != null ? (customerMap[customerId] ?? 'N/A') : 'N/A';
+            itemPartnerId = tx[partnerField]?.toString();
+            itemPartnerType = 'customers';
+            itemPartnerName = itemPartnerId != null ? (customerMap[itemPartnerId] ?? 'N/A') : 'N/A';
           } else if (tableName == 'fix_send_orders' || tableName == 'fix_receive_orders') {
             // Đơn vị fix - dùng fix_unit_id nếu có, nếu không dùng fixer (tên)
             final fixUnitId = tx['fix_unit_id']?.toString();
             if (fixUnitId != null) {
+              itemPartnerId = fixUnitId;
+              itemPartnerType = 'fix_units';
               itemPartnerName = fixerMap[fixUnitId] ?? 'N/A';
             } else {
               itemPartnerName = tx[partnerField]?.toString() ?? 'N/A';
+              itemPartnerType = 'fix_units';
             }
+          } else if (tableName == 'transporter_orders') {
+            // Đơn vị vận chuyển - dùng transporter (tên)
+            itemPartnerName = tx[partnerField]?.toString() ?? 'N/A';
+            itemPartnerType = 'transporters';
           } else {
             itemPartnerName = tx[partnerField]?.toString() ?? 'N/A';
           }
@@ -726,7 +828,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
             'quantity': quantity,
             'total_amount': tx['total_amount'],
             'account': tx['account']?.toString(),
-            'partner_type': tx['partner_type'],
             'from_amount': tx['from_amount'],
             'from_currency': tx['from_currency'],
             'to_amount': tx['to_amount'],
@@ -741,6 +842,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
             'product_name': productName,
             'warehouse_name': warehouseName,
             'partner': itemPartnerName, // Lưu partner cho từng item
+            'partner_id': itemPartnerId, // Lưu partner_id cho từng item
+            'partner_type': itemPartnerType, // Lưu partner_type cho từng item
             'saleman': tx['saleman']?.toString(), // Lưu nhân viên bán
             'note': tx['note']?.toString(), // Lưu ghi chú
             'doanhso': tx['doanhso'], // Lưu doanh số nhân viên
@@ -811,6 +914,364 @@ class _HistoryScreenState extends State<HistoryScreen> {
     return allTickets;
   }
 
+  Widget _buildDetailRow(String label, String value, {String? partnerId, String? partnerType, BuildContext? dialogContext}) {
+    final isPartner = label == 'Đối tác' || label == '  Đối tác';
+    final isTransporter = label == 'Đơn vị vận chuyển';
+    final canViewTransporter = isTransporter && widget.permissions.contains('access_transporters_screen');
+    
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4.0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '$label: ',
+            style: const TextStyle(fontWeight: FontWeight.bold),
+          ),
+          Expanded(
+            child: (isPartner && partnerType != null && value.isNotEmpty && value != 'N/A') || 
+                   (canViewTransporter && value.isNotEmpty && value != 'N/A')
+                ? InkWell(
+                    onTap: () {
+                      if (isTransporter && canViewTransporter) {
+                        // Mở trực tiếp chi tiết đơn vị vận chuyển
+                        _openTransporterDetails(value, dialogContext ?? context);
+                      } else if (isPartner) {
+                        // Hiển thị menu với 2 tùy chọn cho đối tác
+                        showModalBottomSheet(
+                          context: dialogContext ?? context,
+                          builder: (context) => SafeArea(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                ListTile(
+                                  leading: const Icon(Icons.copy),
+                                  title: const Text('Sao chép'),
+                                  onTap: () {
+                                    Clipboard.setData(ClipboardData(text: value));
+                                    Navigator.pop(context);
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text('Đã sao chép vào clipboard'),
+                                        duration: Duration(seconds: 1),
+                                      ),
+                                    );
+                                  },
+                                ),
+                                ListTile(
+                                  leading: const Icon(Icons.visibility),
+                                  title: const Text('Xem đối tác'),
+                                  onTap: () {
+                                    Navigator.pop(context);
+                                    if (partnerType == 'customers') {
+                                      _openCustomerDetails(value, partnerId, dialogContext ?? context);
+                                    } else if (partnerType == 'suppliers') {
+                                      _openSupplierDetails(partnerId, dialogContext ?? context);
+                                    } else if (partnerType == 'transporters') {
+                                      _openTransporterDetails(value, dialogContext ?? context);
+                                    } else if (partnerType == 'fix_units') {
+                                      _openFixerDetails(value, partnerId, dialogContext ?? context);
+                                    }
+                                  },
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }
+                    },
+                    child: Text(
+                      value,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.normal,
+                        color: Colors.blue,
+                        decoration: TextDecoration.underline,
+                      ),
+                    ),
+                  )
+                : GestureDetector(
+                    onLongPress: () {
+                      if (value.isNotEmpty) {
+                        Clipboard.setData(ClipboardData(text: value));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Đã sao chép vào clipboard'),
+                            duration: Duration(seconds: 1),
+                          ),
+                        );
+                      }
+                    },
+                    child: SelectableText(
+                      value,
+                      style: const TextStyle(fontWeight: FontWeight.normal),
+                    ),
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _openCustomerDetails(String? customerName, String? customerId, BuildContext dialogContext) async {
+    if (customerName == null || customerName.isEmpty || customerName == 'N/A') return;
+    
+    // Kiểm tra quyền truy cập màn hình khách hàng
+    if (!widget.permissions.contains('access_customers_screen')) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Bạn không có quyền truy cập màn hình khách hàng')),
+        );
+      }
+      return;
+    }
+    
+    try {
+      final response = await widget.tenantClient
+          .from('customers')
+          .select('id, name, phone, address, social_link, debt_vnd, debt_cny, debt_usd')
+          .eq(customerId != null ? 'id' : 'name', customerId ?? customerName)
+          .maybeSingle();
+      
+      if (response != null && mounted) {
+        Navigator.of(dialogContext, rootNavigator: true).pop();
+        await Future.delayed(const Duration(milliseconds: 100));
+        
+        if (!mounted) return;
+        
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (newContext) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (newContext.mounted) {
+                  showDialog(
+                    context: newContext,
+                    builder: (context) => CustomerDetailsDialog(
+                      customer: response,
+                      tenantClient: widget.tenantClient,
+                    ),
+                  );
+                }
+              });
+              
+              return CustomersScreen(
+                permissions: widget.permissions,
+                tenantClient: widget.tenantClient,
+              );
+            },
+          ),
+        );
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Không tìm thấy thông tin khách hàng')),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Không thể mở chi tiết khách hàng: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _openSupplierDetails(String? supplierId, BuildContext dialogContext) async {
+    if (supplierId == null || supplierId.isEmpty) return;
+    
+    // Kiểm tra quyền truy cập màn hình nhà cung cấp
+    if (!widget.permissions.contains('access_suppliers_screen')) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Bạn không có quyền truy cập màn hình nhà cung cấp')),
+        );
+      }
+      return;
+    }
+    
+    try {
+      final response = await widget.tenantClient
+          .from('suppliers')
+          .select('id, name, phone, address, social_link, debt_vnd, debt_cny, debt_usd')
+          .eq('id', supplierId)
+          .maybeSingle();
+      
+      if (response != null && mounted) {
+        Navigator.of(dialogContext, rootNavigator: true).pop();
+        await Future.delayed(const Duration(milliseconds: 100));
+        
+        if (!mounted) return;
+        
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (newContext) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (newContext.mounted) {
+                  showDialog(
+                    context: newContext,
+                    builder: (context) => SupplierDetailsDialog(
+                      supplier: response,
+                      tenantClient: widget.tenantClient,
+                    ),
+                  );
+                }
+              });
+              
+              return SuppliersScreen(
+                permissions: widget.permissions,
+                tenantClient: widget.tenantClient,
+              );
+            },
+          ),
+        );
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Không tìm thấy thông tin nhà cung cấp')),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Không thể mở chi tiết nhà cung cấp: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _openTransporterDetails(String? transporterName, BuildContext dialogContext) async {
+    if (transporterName == null || transporterName.isEmpty || transporterName == 'N/A') return;
+    
+    // Kiểm tra quyền truy cập màn hình đơn vị vận chuyển
+    if (!widget.permissions.contains('access_transporters_screen')) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Bạn không có quyền truy cập màn hình đơn vị vận chuyển')),
+        );
+      }
+      return;
+    }
+    
+    try {
+      final response = await widget.tenantClient
+          .from('transporters')
+          .select('id, name, phone, address, debt')
+          .eq('name', transporterName)
+          .maybeSingle();
+      
+      if (response != null && mounted) {
+        Navigator.of(dialogContext, rootNavigator: true).pop();
+        await Future.delayed(const Duration(milliseconds: 100));
+        
+        if (!mounted) return;
+        
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (newContext) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (newContext.mounted) {
+                  showDialog(
+                    context: newContext,
+                    builder: (context) => TransporterDetailsDialog(
+                      transporter: response,
+                      tenantClient: widget.tenantClient,
+                    ),
+                  );
+                }
+              });
+              
+              return TransportersScreen(
+                permissions: widget.permissions,
+                tenantClient: widget.tenantClient,
+              );
+            },
+          ),
+        );
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Không tìm thấy thông tin đơn vị vận chuyển')),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Không thể mở chi tiết đơn vị vận chuyển: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _openFixerDetails(String? fixerName, String? fixerId, BuildContext dialogContext) async {
+    if (fixerName == null || fixerName.isEmpty || fixerName == 'N/A') return;
+    
+    // Kiểm tra quyền truy cập màn hình đơn vị fix lỗi
+    if (!widget.permissions.contains('access_fixers_screen')) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Bạn không có quyền truy cập màn hình đơn vị fix lỗi')),
+        );
+      }
+      return;
+    }
+    
+    try {
+      final response = await widget.tenantClient
+          .from('fix_units')
+          .select('id, name, phone, address, social_link, debt_vnd, debt_cny, debt_usd')
+          .eq(fixerId != null ? 'id' : 'name', fixerId ?? fixerName)
+          .maybeSingle();
+      
+      if (response != null && mounted) {
+        Navigator.of(dialogContext, rootNavigator: true).pop();
+        await Future.delayed(const Duration(milliseconds: 100));
+        
+        if (!mounted) return;
+        
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (newContext) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (newContext.mounted) {
+                  showDialog(
+                    context: newContext,
+                    builder: (context) => FixerDetailsDialog(
+                      fixer: response,
+                      tenantClient: widget.tenantClient,
+                    ),
+                  );
+                }
+              });
+              
+              return FixersScreen(
+                permissions: widget.permissions,
+                tenantClient: widget.tenantClient,
+              );
+            },
+          ),
+        );
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Không tìm thấy thông tin đơn vị fix lỗi')),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Không thể mở chi tiết đơn vị fix lỗi: $e')),
+        );
+      }
+    }
+  }
+
   void _showTransactionDetails(Map<String, dynamic> ticket) {
     String? saleman;
     num? totalDoanhso;
@@ -850,6 +1311,35 @@ class _HistoryScreenState extends State<HistoryScreen> {
     final displayPartner = hasMultiplePartners && uniquePartners.length > 1
         ? 'Nhiều đối tác (${uniquePartners.length})'
         : ticket['partner'];
+    
+    // Tính tổng tiền cọc và tiền COD cho Ship COD orders và COD hoàn (tổng của toàn phiếu)
+    num totalCustomerPrice = 0;
+    num totalTransporterPrice = 0;
+    String? transporterName;
+    final isShipCod = ticket['table'] == 'sale_orders' && 
+        ticket['items'] is List<dynamic> &&
+        ticket['items'].isNotEmpty &&
+        ticket['items'][0]['account']?.toString() == 'Ship COD';
+    final isCodHoan = ticket['table'] == 'reimport_orders' && 
+        ticket['items'] is List<dynamic> &&
+        ticket['items'].isNotEmpty &&
+        ticket['items'][0]['account']?.toString() == 'Cod hoàn';
+    
+    if (isShipCod || isCodHoan) {
+      for (var item in ticket['items'] as List) {
+        if (item['customer_price'] != null) {
+          final price = num.tryParse(item['customer_price'].toString()) ?? 0;
+          totalCustomerPrice += price;
+        }
+        if (item['transporter_price'] != null) {
+          final price = num.tryParse(item['transporter_price'].toString()) ?? 0;
+          totalTransporterPrice += price;
+        }
+        if (transporterName == null && item['transporter'] != null && item['transporter'].toString().isNotEmpty) {
+          transporterName = item['transporter'].toString();
+        }
+      }
+    }
 
     showDialog(
       context: context,
@@ -861,39 +1351,79 @@ class _HistoryScreenState extends State<HistoryScreen> {
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Loại Phiếu: ${_getDisplayType(ticket['type'], ticket['table'])}'),
-                Text('Đối tác: $displayPartner'),
+                _buildDetailRow('Loại Phiếu', _getDisplayType(
+                  ticket['type'], 
+                  ticket['table'],
+                  account: ticket['items'] is List && (ticket['items'] as List).isNotEmpty 
+                      ? (ticket['items'][0]['account']?.toString())
+                      : null,
+                )),
+                _buildDetailRow(
+                  'Đối tác',
+                  displayPartner ?? 'N/A',
+                  partnerId: ticket['partner_id']?.toString(),
+                  partnerType: ticket['partner_type']?.toString(),
+                  dialogContext: context,
+                ),
                 if (isFinancialTicket && financialType == 'exchange') ...[
-                  Text('Số Tiền Đổi: ${_formatNumber(ticket['items'][0]['from_amount'])} ${ticket['items'][0]['from_currency']}'),
+                  _buildDetailRow('Số Tiền Đổi', '${_formatNumber(ticket['items'][0]['from_amount'])} ${ticket['items'][0]['from_currency']}'),
                   if (ticket['items'][0]['to_amount'] != null && ticket['items'][0]['to_currency'] != null)
-                    Text('Số Tiền Nhận: ${_formatNumber(ticket['items'][0]['to_amount'])} ${ticket['items'][0]['to_currency']}'),
+                    _buildDetailRow('Số Tiền Nhận', '${_formatNumber(ticket['items'][0]['to_amount'])} ${ticket['items'][0]['to_currency']}'),
                 ] else if (isFinancialTicket)
-                  Text('Số Tiền: ${_formatNumber(ticket['items'][0]['amount'])} ${ticket['items'][0]['currency'] ?? 'VND'}')
+                  _buildDetailRow('Số Tiền', '${_formatNumber(ticket['items'][0]['amount'])} ${ticket['items'][0]['currency'] ?? 'VND'}')
                 else
-                  Text('Tổng Tiền: ${_formatNumber(ticket['total_amount'])} ${ticket['currency'] ?? 'VND'}'),
-                Text('Ngày: ${_formatDate(ticket['date'])}'),
+                  _buildDetailRow('Tổng Tiền', '${_formatNumber(ticket['total_amount'])} ${ticket['currency'] ?? 'VND'}'),
+                _buildDetailRow('Ngày', _formatDate(ticket['date'])),
                 if (!isFinancialTicket) ...[
-                  Text('Số Lượng: ${ticket['table'] == 'transporter_orders' ? ticket['total_quantity'] : _formatNumber(ticket['total_quantity'])}'),
+                  _buildDetailRow('Số Lượng', ticket['table'] == 'transporter_orders' ? ticket['total_quantity'].toString() : _formatNumber(ticket['total_quantity'])),
                 ],
-                if (ticket['items'][0]['account'] != null && !isFinancialTicket)
-                  Text('Tài Khoản: ${ticket['items'][0]['account']}'),
-                if (saleman != null) Text('Nhân viên bán: $saleman'),
+                // Hiển thị tài khoản cho financial_orders (payment, receive, cost, income_other) nhưng không hiển thị cho exchange và transfer_fund (vì có to_account riêng)
+                // Và hiển thị cho non-financial tickets nhưng không hiển thị nếu là Ship COD hoặc Cod hoàn (vì thừa)
+                if (ticket['items'][0]['account'] != null && 
+                    ((isFinancialTicket && financialType != 'exchange' && financialType != 'transfer_fund') ||
+                     (!isFinancialTicket && 
+                      ticket['items'][0]['account'].toString() != 'Ship COD' &&
+                      ticket['items'][0]['account'].toString() != 'Cod hoàn')))
+                  _buildDetailRow('Tài Khoản', ticket['items'][0]['account'].toString()),
+                // Hiển thị thông tin Ship COD: tiền cọc, tiền COD, đơn vị vận chuyển (tổng của toàn phiếu)
+                if (isShipCod) ...[
+                  if (totalCustomerPrice > 0)
+                    _buildDetailRow('Tiền cọc', '${_formatNumber(totalCustomerPrice)} ${ticket['currency'] ?? 'VND'}'),
+                  if (totalTransporterPrice > 0)
+                    _buildDetailRow('Tiền COD', '${_formatNumber(totalTransporterPrice)} ${ticket['currency'] ?? 'VND'}'),
+                  if (transporterName != null && transporterName.isNotEmpty)
+                    _buildDetailRow(
+                      'Đơn vị vận chuyển', 
+                      transporterName,
+                      partnerType: 'transporters', // Thêm partnerType để có thể click
+                      dialogContext: context,
+                    ),
+                ],
+                // Hiển thị thông tin COD hoàn: tiền cọc, tiền COD (tổng của toàn phiếu)
+                if (isCodHoan) ...[
+                  if (totalCustomerPrice > 0)
+                    _buildDetailRow('Tiền cọc', '${_formatNumber(totalCustomerPrice)} ${ticket['currency'] ?? 'VND'}'),
+                  if (totalTransporterPrice > 0)
+                    _buildDetailRow('Tiền COD', '${_formatNumber(totalTransporterPrice)} ${ticket['currency'] ?? 'VND'}'),
+                ],
+                if (saleman != null) _buildDetailRow('Nhân viên bán', saleman),
                 if (totalDoanhso != null && totalDoanhso > 0)
-                  Text('Doanh số nhân viên: ${_formatNumber(totalDoanhso)}'),
+                  _buildDetailRow('Doanh số nhân viên', _formatNumber(totalDoanhso)),
                 if (!isFinancialTicket) ...[
-                  ...ticket['items'].map<Widget>((item) {
-                    final productName = item['product_name']?.toString() ?? 'N/A';
-                    final quantity = item['quantity'] as num? ?? 0;
-                    if (productName != 'N/A' && quantity > 0) {
-                      return Text('Sản phẩm: $productName x${quantity.toInt()}');
+                  // Gom nhóm sản phẩm cùng loại để hiển thị gọn
+                  ..._groupProductsByName(ticket['items'] as List<dynamic>).map<Widget>((group) {
+                    final productName = group['product_name'] as String;
+                    final totalQuantity = group['total_quantity'] as num;
+                    if (productName != 'N/A' && totalQuantity > 0) {
+                      return _buildDetailRow('Sản phẩm', '$productName x${totalQuantity.toInt()}');
                     }
                     return const SizedBox.shrink();
                   }).toList(),
                 ],
                 if (ticket['warehouse_name'] != null && ticket['warehouse_name'] != 'N/A')
-                  Text('Kho: ${ticket['warehouse_name']}'),
+                  _buildDetailRow('Kho', ticket['warehouse_name']),
                 if (ticket['note'] != null && ticket['note'].toString().isNotEmpty)
-                  Text('Ghi chú: ${ticket['note']}'),
+                  _buildDetailRow('Ghi chú', ticket['note'].toString()),
                 if (!isFinancialTicket) ...[
                   const SizedBox(height: 8),
                   const Text('Chi tiết sản phẩm:', style: TextStyle(fontWeight: FontWeight.bold)),
@@ -903,24 +1433,37 @@ class _HistoryScreenState extends State<HistoryScreen> {
                     return Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        if (ticket['items'].length > 1) Text('Sản phẩm ${entry.key + 1}:'),
+                        if (ticket['items'].length > 1) 
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8.0),
+                            child: Text('Sản phẩm ${entry.key + 1}:', style: const TextStyle(fontWeight: FontWeight.bold)),
+                          ),
                         if (hasMultiplePartners && item['partner'] != null)
-                          Text('  Đối tác: ${item['partner']}'),
+                          _buildDetailRow(
+                            '  Đối tác',
+                            item['partner'].toString(),
+                            partnerId: item['partner_id']?.toString(),
+                            partnerType: item['partner_type']?.toString(),
+                            dialogContext: context,
+                          ),
                         if (currentTable != 'transporter_orders' && item['quantity'] != null)
-                          Text('  Số Lượng: ${item['quantity']}'),
+                          _buildDetailRow('  Số Lượng', item['quantity'].toString()),
                         if (currentTable == 'transporter_orders' && item['imei'] != null)
-                          Text('  Số Lượng: ${(item['imei'] as String).split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).length}'),
-                        if (item['amount'] != null) Text('  Giá: ${_formatNumber(item['amount'])} ${item['currency']}'),
-                        if (item['total_amount'] != null) Text('  Tổng: ${_formatNumber(item['total_amount'])} ${item['currency']}'),
+                          _buildDetailRow('  Số Lượng', (item['imei'] as String).split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).length.toString()),
+                        if (item['amount'] != null) 
+                          _buildDetailRow('  Giá', '${_formatNumber(item['amount'])} ${item['currency']}'),
+                        if (item['total_amount'] != null) 
+                          _buildDetailRow('  Tổng', '${_formatNumber(item['total_amount'])} ${item['currency']}'),
                         if (item['product_name'] != null && item['product_name'] != 'N/A')
-                          Text('  Sản phẩm: ${item['product_name']}'),
+                          _buildDetailRow('  Sản phẩm', item['product_name'].toString()),
                         if (item['warehouse_name'] != null && item['warehouse_name'] != 'N/A')
-                          Text('  Kho: ${item['warehouse_name']}'),
-                        if (item['imei'] != null) Text('  IMEI: ${item['imei']}'),
+                          _buildDetailRow('  Kho', item['warehouse_name'].toString()),
+                        if (item['imei'] != null) 
+                          _buildDetailRow('  IMEI', item['imei'].toString()),
                         if (item['doanhso'] != null && item['doanhso'] != 0)
-                          Text('  Doanh số: ${_formatNumber(item['doanhso'])}'),
+                          _buildDetailRow('  Doanh số', _formatNumber(item['doanhso'])),
                         if (item['note'] != null && item['note'].toString().isNotEmpty)
-                          Text('  Ghi chú: ${item['note']}'),
+                          _buildDetailRow('  Ghi chú', item['note'].toString()),
                       ],
                     );
                   }),
@@ -1336,12 +1879,54 @@ class _HistoryScreenState extends State<HistoryScreen> {
         }
       }
 
+      // Xử lý restore reimport_orders riêng (bao gồm cả 3 cột mới: account, customer_price, transporter_price)
+      if (table == 'reimport_orders' && snapshotData['reimport_orders'] != null) {
+        // Xóa các records hiện tại với ticket_id này
+        developer.log('restoreSnapshot: Deleting existing reimport_orders for ticket_id: $ticketId');
+        await widget.tenantClient
+            .from('reimport_orders')
+            .delete()
+            .eq('ticket_id', ticketId);
+        
+        // Restore lại từ snapshot (bao gồm cả 3 cột mới)
+        final orders = snapshotData['reimport_orders'] as List<dynamic>;
+        developer.log('restoreSnapshot: Restoring ${orders.length} reimport_orders for ticket_id: $ticketId');
+        for (var order in orders) {
+          // Đảm bảo restore đầy đủ các cột, bao gồm account, customer_price, transporter_price
+          // Xử lý các giá trị null đúng cách
+          final restoreData = <String, dynamic>{
+            'ticket_id': order['ticket_id'],
+            'customer_id': order['customer_id'],
+            'product_id': order['product_id'],
+            'warehouse_id': order['warehouse_id'],
+            'imei': order['imei'],
+            'quantity': order['quantity'] ?? 1,
+            'price': order['price'],
+            'currency': order['currency'],
+            'note': order['note'],
+            'created_at': order['created_at'] ?? DateTime.now().toIso8601String(),
+          };
+          
+          // Chỉ thêm các cột mới nếu có trong snapshot (để tương thích với snapshot cũ)
+          if (order.containsKey('account')) {
+            restoreData['account'] = order['account']; // ✅ Restore account (có thể là "Cod hoàn")
+          }
+          if (order.containsKey('customer_price')) {
+            restoreData['customer_price'] = order['customer_price']; // ✅ Restore customer_price
+          }
+          if (order.containsKey('transporter_price')) {
+            restoreData['transporter_price'] = order['transporter_price']; // ✅ Restore transporter_price
+          }
+          
+          await widget.tenantClient.from('reimport_orders').insert(restoreData);
+        }
+      }
+      
       const validTables = [
         'financial_orders',
         'sale_orders',
         'import_orders',
         'return_orders',
-        'reimport_orders',
         'fix_send_orders',
         'fix_receive_orders',
         'transporter_orders',
@@ -1422,6 +2007,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
         'Số Lượng',
         'Ngày',
         'Tài Khoản',
+        'Tiền cọc',
+        'Tiền COD',
+        'Đơn vị vận chuyển',
         'Nhân viên bán',
         'Doanh số nhân viên',
         'Ghi chú',
@@ -1429,7 +2017,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       final headers = headerLabels.map(TextCellValue.new).toList();
 
       sheet.appendRow(headers);
-
+      
       final border = Border(borderStyle: BorderStyle.Thin);
       final headerStyle = CellStyle(
         bold: true,
@@ -1479,10 +2067,13 @@ class _HistoryScreenState extends State<HistoryScreen> {
       }
 
       int dataRowIndex = 2; // Bắt đầu từ row 2 (sau header row)
-      const multilineColumns = {4, 12};
+      const multilineColumns = {4, 15}; // IMEI (4) và Ghi chú (15)
       for (var ticket in exportTickets) {
         final tableName = ticket['table'] as String;
-        final type = _getDisplayType(ticket['type'], tableName);
+        final account = ticket['items'] is List && (ticket['items'] as List).isNotEmpty 
+            ? (ticket['items'][0]['account']?.toString())
+            : null;
+        final type = _getDisplayType(ticket['type'], tableName, account: account);
         final date = _formatDate(ticket['date']);
 
         // Create separate rows for each product in the ticket
@@ -1497,8 +2088,28 @@ class _HistoryScreenState extends State<HistoryScreen> {
           final quantity = tableName == 'transporter_orders' 
               ? (item['imei'] != null ? (item['imei'] as String).split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).length.toString() : '0')
               : _formatNumber(item['quantity'] ?? 0);
-          final account = (item['account'] != null && ticket['type'] != 'exchange' && ticket['type'] != 'payment' && ticket['type'] != 'transfer_fund')
+          // Hiển thị tài khoản cho financial_orders (payment, receive, cost, income_other) nhưng không hiển thị cho exchange và transfer_fund (vì có to_account riêng)
+          // Và hiển thị cho non-financial tickets nhưng không hiển thị nếu là Ship COD hoặc Cod hoàn (vì thừa)
+          final account = (item['account'] != null && 
+              ticket['type'] != 'exchange' && 
+              ticket['type'] != 'transfer_fund' &&
+              item['account'].toString() != 'Ship COD' &&
+              item['account'].toString() != 'Cod hoàn')
               ? item['account'].toString()
+              : '';
+          // Tiền cọc và tiền COD hiển thị cho sale_orders với account == 'Ship COD' hoặc reimport_orders với account == 'Cod hoàn'
+          final isShipCodItem = tableName == 'sale_orders' && item['account']?.toString() == 'Ship COD';
+          final isCodHoanItem = tableName == 'reimport_orders' && item['account']?.toString() == 'Cod hoàn';
+          final customerPrice = ((isShipCodItem || isCodHoanItem) && item['customer_price'] != null)
+              ? _formatNumber(item['customer_price'])
+              : '';
+          final transporterPrice = ((isShipCodItem || isCodHoanItem) && item['transporter_price'] != null)
+              ? _formatNumber(item['transporter_price'])
+              : '';
+          final transporterName = ((isShipCodItem || isCodHoanItem) && 
+              item['transporter'] != null && 
+              item['transporter'].toString().isNotEmpty)
+              ? item['transporter'].toString()
               : '';
           final saleman = item['saleman']?.toString() ?? '';
           final doanhso = (item['doanhso'] != null && item['doanhso'] != 0)
@@ -1523,6 +2134,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
             quantity,
             date,
             account,
+            customerPrice,
+            transporterPrice,
+            transporterName,
             saleman,
             doanhso,
             note,
@@ -1530,7 +2144,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
           final rowData = rowValues.map(TextCellValue.new).toList();
           
           sheet.appendRow(rowData);
-
+          
           final currentRowIndex = dataRowIndex - 1;
           for (int columnIndex = 0;
               columnIndex < columnCount;
@@ -1540,7 +2154,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
                 columnIndex: columnIndex,
                 rowIndex: currentRowIndex,
               ),
-            );
+          );
             final isMultiline = multilineColumns.contains(columnIndex);
             cell.cellStyle = isMultiline ? multilineDataStyle : dataStyle;
             _updateExcelMetrics(
@@ -1551,7 +2165,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
               value: rowValues[columnIndex],
             );
           }
-
+          
           dataRowIndex++;
         }
       }
@@ -1747,8 +2361,17 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        children: [
+          Expanded(
       child: ListTile(
-        title: Text(_getDisplayType(ticket['type'], ticket['table'])),
+        title: Text(_getDisplayType(
+          ticket['type'], 
+          ticket['table'],
+          account: ticket['items'] is List && (ticket['items'] as List).isNotEmpty 
+              ? (ticket['items'][0]['account']?.toString())
+              : null,
+        )),
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -1764,11 +2387,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
             ],
             Text('Ngày: ${_formatDate(ticket['date'])}'),
             if (!isFinancialTicket) ...[
-              ...ticket['items'].map<Widget>((item) {
-                final productName = item['product_name']?.toString() ?? 'N/A';
-                final quantity = item['quantity'] as num? ?? 0;
-                if (productName != 'N/A' && quantity > 0) {
-                  return Text('Sản phẩm: $productName x${quantity.toInt()}');
+              // Gom nhóm sản phẩm cùng loại để hiển thị gọn
+              ..._groupProductsByName(ticket['items'] as List<dynamic>).map<Widget>((group) {
+                final productName = group['product_name'] as String;
+                final totalQuantity = group['total_quantity'] as num;
+                if (productName != 'N/A' && totalQuantity > 0) {
+                  return Text('Sản phẩm: $productName x${totalQuantity.toInt()}');
                 }
                 return const SizedBox.shrink();
               }).toList(),
@@ -1777,11 +2401,1010 @@ class _HistoryScreenState extends State<HistoryScreen> {
               Text('Kho: ${ticket['warehouse_name']}'),
           ],
         ),
-        trailing: IconButton(
+            ),
+          ),
+          IntrinsicHeight(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.print, color: Colors.green),
+                  onPressed: () => _showPrintOptions(ticket),
+                  tooltip: 'In',
+                ),
+                IconButton(
           icon: const Icon(Icons.visibility, color: Colors.blue),
           onPressed: () => _showTransactionDetails(ticket),
+                  tooltip: 'Xem chi tiết',
+        ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showPrintOptions(Map<String, dynamic> ticket) {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.receipt, color: Colors.blue),
+              title: const Text('In phiếu'),
+              subtitle: const Text('In hóa đơn phiếu giao dịch'),
+              onTap: () {
+                Navigator.pop(context);
+                _printTicket(ticket);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.label, color: Colors.green),
+              title: const Text('In tem IMEI'),
+              subtitle: const Text('In tem nhãn IMEI cho tất cả sản phẩm'),
+              onTap: () {
+                Navigator.pop(context);
+                _printImeiLabels(ticket);
+              },
+            ),
+          ],
         ),
       ),
+    );
+  }
+
+  // Helper để lấy tên sản phẩm từ product_id
+  String _getProductName(String? productId) {
+    if (productId == null || productId.isEmpty) return 'N/A';
+    return productMap[productId] ?? 'N/A';
+  }
+
+  /// In tem IMEI qua Bluetooth từ ticket
+  Future<void> _executeBluetoothPrintImeiLabels(Map<String, dynamic> ticket) async {
+    try {
+      // Kiểm tra kết nối Bluetooth
+      bool connected = await BluetoothPrintHelper.isConnected();
+      
+      // Nếu chưa kết nối, hiển thị dialog chọn máy in
+      if (!connected) {
+        final device = await BluetoothPrintHelper.showDevicePicker(context);
+        if (device == null) {
+          return; // User hủy chọn máy in
+        }
+        
+        // Kết nối với máy in
+        final success = await BluetoothPrintHelper.connect(device);
+        if (!success) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Không thể kết nối với máy in Bluetooth')),
+            );
+          }
+          return;
+        }
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Đã kết nối với máy in Bluetooth')),
+          );
+        }
+      }
+
+      // Thu thập tất cả IMEI từ ticket
+      final List<Map<String, dynamic>> itemsToPrint = [];
+      
+      if (ticket['items'] is List) {
+        for (var item in ticket['items'] as List) {
+          final productId = item['product_id']?.toString();
+          final imeiString = item['imei']?.toString() ?? '';
+          final imeis = _parseImeis(imeiString);
+          
+          if (imeis.isNotEmpty && productId != null) {
+            for (var imei in imeis) {
+              itemsToPrint.add({
+                'product_id': productId,
+                'imei': imei,
+              });
+            }
+          }
+        }
+      }
+
+      if (itemsToPrint.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Không có IMEI để in')),
+          );
+        }
+        return;
+      }
+
+      // Hiển thị loading
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const CircularProgressIndicator(),
+              const SizedBox(height: 16),
+              Text('Đang in ${itemsToPrint.length} tem qua Bluetooth...'),
+            ],
+          ),
+        ),
+      );
+
+      // In từng item
+      int successCount = 0;
+      int failCount = 0;
+      
+      for (var item in itemsToPrint) {
+        final productId = item['product_id']?.toString() ?? '';
+        final imei = item['imei']?.toString() ?? '';
+        final productName = _getProductName(productId);
+        
+        if (imei.isNotEmpty && productName.isNotEmpty) {
+          final success = await BluetoothPrintHelper.printImeiLabel(
+            productName: productName,
+            imei: imei,
+            labelHeight: 30, // Mặc định 30mm cho Bluetooth
+          );
+          
+          if (success) {
+            successCount++;
+            // Đợi một chút giữa các lần in để tránh quá tải
+            await Future.delayed(const Duration(milliseconds: 500));
+          } else {
+            failCount++;
+          }
+        }
+      }
+
+      if (mounted) {
+        Navigator.pop(context); // Đóng loading dialog
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Đã in $successCount tem. ${failCount > 0 ? 'Lỗi: $failCount tem' : ''}'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Lỗi khi in qua Bluetooth: $e')),
+        );
+      }
+    }
+  }
+
+  // Helper để parse IMEI từ string (có thể là comma-separated)
+  List<String> _parseImeis(String? imeiString) {
+    if (imeiString == null || imeiString.isEmpty || imeiString == 'N/A') {
+      return [];
+    }
+    return imeiString
+        .split(RegExp(r'[,;\n]+'))
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
+  }
+
+  // Helper function để load font hỗ trợ Unicode
+  // Sử dụng font mặc định của package pdf (hỗ trợ Unicode)
+  // Nếu có font trong assets thì load từ đó, nếu không thì dùng font mặc định
+  Future<pw.Font?> _loadUnicodeFont() async {
+    try {
+      // Thử load font từ assets nếu có
+      final fontData = await rootBundle.load('assets/fonts/Roboto-Regular.ttf');
+      return pw.Font.ttf(fontData);
+    } catch (e) {
+      // Nếu không có font trong assets, trả về null để dùng font mặc định
+      // Package pdf 3.11.1 có hỗ trợ Unicode với font mặc định
+      return null;
+    }
+  }
+
+  Future<pw.Font?> _loadUnicodeFontBold() async {
+    try {
+      final fontData = await rootBundle.load('assets/fonts/Roboto-Bold.ttf');
+      return pw.Font.ttf(fontData);
+    } catch (e) {
+      // Trả về null để dùng font mặc định
+      return null;
+    }
+  }
+
+  // In phiếu (hóa đơn)
+  Future<void> _printTicket(Map<String, dynamic> ticket) async {
+    try {
+      final pdf = pw.Document();
+      // Load font hỗ trợ Unicode (nếu có trong assets)
+      final baseFont = await _loadUnicodeFont();
+      final boldFont = await _loadUnicodeFontBold();
+      
+      final tableName = ticket['table'] as String;
+      final account = ticket['items'] is List && (ticket['items'] as List).isNotEmpty 
+          ? (ticket['items'][0]['account']?.toString())
+          : null;
+      final ticketType = _getDisplayType(ticket['type'], tableName, account: account);
+      final ticketId = ticket['id']?.toString() ?? '';
+      final date = _formatDate(ticket['date']);
+      
+      // Lấy thông tin đối tác
+      // Kiểm tra nếu có nhiều đối tác khác nhau trong ticket (giống logic trong _showTransactionDetails)
+      final hasMultiplePartners = tableName == 'return_orders' || tableName == 'reimport_orders';
+      final uniquePartners = hasMultiplePartners 
+          ? (ticket['items'] as List).map((item) => item['partner'] as String? ?? 'N/A').toSet()
+          : <String>{};
+      final displayPartner = hasMultiplePartners && uniquePartners.length > 1
+          ? 'Nhiều đối tác (${uniquePartners.length})'
+          : (ticket['partner']?.toString() ?? 'N/A');
+
+      pdf.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat.a4,
+          margin: const pw.EdgeInsets.all(40),
+          theme: baseFont != null && boldFont != null
+              ? pw.ThemeData.withFont(
+                  base: baseFont,
+                  bold: boldFont,
+                )
+              : null, // Dùng font mặc định nếu không có font từ assets
+          build: (context) {
+            return pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                // Header: Tên phiếu
+                pw.Center(
+                  child: pw.Text(
+                    ticketType,
+                    style: pw.TextStyle(
+                      fontSize: 24,
+                      fontWeight: pw.FontWeight.bold,
+                      font: boldFont,
+                    ),
+                  ),
+                ),
+                pw.SizedBox(height: 20),
+                
+                // Thông tin phiếu
+                pw.Container(
+                  padding: const pw.EdgeInsets.all(16),
+                  decoration: pw.BoxDecoration(
+                    border: pw.Border.all(color: PdfColors.grey800, width: 1),
+                    borderRadius: const pw.BorderRadius.all(pw.Radius.circular(8)),
+                  ),
+                  child: pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                    children: [
+                      _buildInfoRow('Mã phiếu:', ticketId, baseFont: baseFont, boldFont: boldFont),
+                      _buildInfoRow('Đối tác:', displayPartner, baseFont: baseFont, boldFont: boldFont),
+                      if (ticket['total_amount'] != null)
+                        _buildInfoRow(
+                          'Tổng tiền:',
+                          '${_formatNumber(ticket['total_amount'])} ${ticket['currency'] ?? 'VND'}',
+                          baseFont: baseFont,
+                          boldFont: boldFont,
+                        ),
+                      if (ticket['total_quantity'] != null && tableName != 'financial_orders')
+                        _buildInfoRow(
+                          'Số lượng:',
+                          tableName == 'transporter_orders'
+                              ? ticket['total_quantity'].toString()
+                              : _formatNumber(ticket['total_quantity']),
+                          baseFont: baseFont,
+                          boldFont: boldFont,
+                        ),
+                      if (ticket['warehouse_name'] != null && ticket['warehouse_name'] != 'N/A')
+                        _buildInfoRow('Kho:', ticket['warehouse_name'].toString(), baseFont: baseFont, boldFont: boldFont),
+                      if (ticket['items'] is List && (ticket['items'] as List).isNotEmpty) ...[
+                        pw.SizedBox(height: 12),
+                        pw.Divider(),
+                        pw.SizedBox(height: 12),
+                        pw.Text(
+                          'Chi tiết sản phẩm:',
+                          style: pw.TextStyle(
+                            fontSize: 14,
+                            fontWeight: pw.FontWeight.bold,
+                            font: boldFont,
+                          ),
+                        ),
+                        pw.SizedBox(height: 8),
+                        // Bảng sản phẩm
+                        pw.Table(
+                          border: pw.TableBorder.all(color: PdfColors.grey400, width: 0.5),
+                          children: [
+                            // Header row
+                            pw.TableRow(
+                              decoration: const pw.BoxDecoration(color: PdfColors.grey200),
+                              children: [
+                                _buildTableCell('STT', isHeader: true, baseFont: baseFont, boldFont: boldFont),
+                                _buildTableCell('Sản phẩm', isHeader: true, baseFont: baseFont, boldFont: boldFont),
+                                _buildTableCell('Số lượng', isHeader: true, baseFont: baseFont, boldFont: boldFont),
+                                _buildTableCell('Đơn giá', isHeader: true, baseFont: baseFont, boldFont: boldFont),
+                                _buildTableCell('Thành tiền', isHeader: true, baseFont: baseFont, boldFont: boldFont),
+                                _buildTableCell('IMEI', isHeader: true, baseFont: baseFont, boldFont: boldFont),
+                              ],
+                            ),
+                            // Data rows
+                            ...(ticket['items'] as List).asMap().entries.map((entry) {
+                              final index = entry.key;
+                              final item = entry.value;
+                              final productName = item['product_name']?.toString() ?? 'N/A';
+                              final quantity = item['quantity']?.toString() ?? '0';
+                              final amount = item['amount'] ?? item['total_amount'] ?? 0;
+                              final currency = item['currency']?.toString() ?? 'VND';
+                              final totalAmount = item['total_amount'] ?? (amount * (num.tryParse(quantity) ?? 0));
+                              final imeiString = item['imei']?.toString() ?? '';
+                              final imeis = _parseImeis(imeiString);
+                              
+                              return pw.TableRow(
+                                children: [
+                                  _buildTableCell('${index + 1}', baseFont: baseFont, boldFont: boldFont),
+                                  _buildTableCell(productName, baseFont: baseFont, boldFont: boldFont),
+                                  _buildTableCell(quantity, baseFont: baseFont, boldFont: boldFont),
+                                  _buildTableCell('${_formatNumber(amount)} $currency', baseFont: baseFont, boldFont: boldFont),
+                                  _buildTableCell('${_formatNumber(totalAmount)} $currency', baseFont: baseFont, boldFont: boldFont),
+                                  _buildTableCell(
+                                    imeis.isEmpty ? 'N/A' : imeis.join('\n'),
+                                    isMultiline: true,
+                                    baseFont: baseFont,
+                                    boldFont: boldFont,
+                                  ),
+                                ],
+                              );
+                            }).toList(),
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                
+                pw.Spacer(),
+                
+                // Footer: Ngày tạo phiếu
+                pw.Align(
+                  alignment: pw.Alignment.centerRight,
+                  child: pw.Text(
+                    'Ngày tạo: $date',
+                    style: pw.TextStyle(
+                      fontSize: 12,
+                      color: PdfColors.grey600,
+                      font: baseFont,
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      );
+
+      await Printing.layoutPdf(
+        onLayout: (format) async => pdf.save(),
+        name: 'Phieu_${ticketId}_${DateTime.now().millisecondsSinceEpoch}.pdf',
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Lỗi khi in phiếu: $e')),
+        );
+      }
+    }
+  }
+
+  pw.Widget _buildInfoRow(String label, String value, {pw.Font? baseFont, pw.Font? boldFont}) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.only(bottom: 8),
+      child: pw.Row(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.SizedBox(
+            width: 120,
+            child: pw.Text(
+              label,
+              style: pw.TextStyle(
+                fontWeight: pw.FontWeight.bold,
+                fontSize: 12,
+                font: boldFont,
+              ),
+            ),
+          ),
+          pw.Expanded(
+            child: pw.Text(
+              value,
+              style: pw.TextStyle(
+                fontSize: 12,
+                font: baseFont,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  pw.Widget _buildTableCell(String text, {bool isHeader = false, bool isMultiline = false, pw.Font? baseFont, pw.Font? boldFont}) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.all(4),
+      child: pw.Text(
+        text,
+        style: pw.TextStyle(
+          fontSize: isHeader ? 11 : 10,
+          fontWeight: isHeader ? pw.FontWeight.bold : pw.FontWeight.normal,
+          font: isHeader ? boldFont : baseFont,
+        ),
+        textAlign: pw.TextAlign.center,
+        maxLines: isMultiline ? null : 1,
+      ),
+    );
+  }
+
+  // In tem IMEI (giống inventory_screen.dart)
+  Future<void> _printImeiLabels(Map<String, dynamic> ticket) async {
+    String printType;
+    int labelsPerRow;
+    int labelHeight;
+    bool saveAsDefault = false;
+
+    if (_hasDefaultSettings) {
+      printType = _defaultPrintType;
+      labelsPerRow = _defaultLabelsPerRow;
+      labelHeight = _defaultLabelHeight;
+    } else {
+      final result = await showDialog<Map<String, dynamic>>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Cài đặt in tem'),
+          content: SingleChildScrollView(
+            child: _PrintSettingsDialog(
+              defaultPrintType: _defaultPrintType,
+              defaultLabelsPerRow: _defaultLabelsPerRow,
+              defaultLabelHeight: _defaultLabelHeight,
+            ),
+          ),
+        ),
+      );
+
+      if (result == null) return;
+
+      printType = result['printType'] as String;
+      labelsPerRow = result['labelsPerRow'] as int;
+      labelHeight = result['labelHeight'] as int;
+      saveAsDefault = result['saveAsDefault'] as bool;
+
+      if (saveAsDefault) {
+        await _savePrintSettings(printType, labelsPerRow, labelHeight);
+        setState(() {
+          _defaultPrintType = printType;
+          _defaultLabelsPerRow = labelsPerRow;
+          _defaultLabelHeight = labelHeight;
+        });
+      }
+    }
+
+    // Nếu chọn in qua Bluetooth, xử lý riêng
+    // Trên iOS, tạm thời disable Bluetooth do package có bug
+    if (printType == 'bluetooth') {
+      if (Platform.isIOS) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Tính năng in qua Bluetooth tạm thời không khả dụng trên iOS. Vui lòng sử dụng in PDF/thermal.'),
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+        return;
+      }
+      await _executeBluetoothPrintImeiLabels(ticket);
+      return;
+    }
+
+    try {
+      // Thu thập tất cả IMEI từ ticket
+      final List<Map<String, dynamic>> itemsToPrint = [];
+      
+      if (ticket['items'] is List) {
+        for (var item in ticket['items'] as List) {
+          final productId = item['product_id']?.toString();
+          final imeiString = item['imei']?.toString() ?? '';
+          final imeis = _parseImeis(imeiString);
+          
+          if (imeis.isNotEmpty && productId != null) {
+            for (var imei in imeis) {
+              itemsToPrint.add({
+                'product_id': productId,
+                'imei': imei,
+              });
+            }
+          }
+        }
+      }
+
+      if (itemsToPrint.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Không có IMEI để in')),
+          );
+        }
+        return;
+      }
+
+      final pdf = pw.Document();
+      final barcodeGen = Barcode.code128();
+
+      if (printType == 'thermal') {
+        if (labelsPerRow == 1) {
+          for (var item in itemsToPrint) {
+            pdf.addPage(
+              pw.Page(
+                pageFormat: PdfPageFormat(
+                  40 * PdfPageFormat.mm,
+                  labelHeight * PdfPageFormat.mm,
+                  marginAll: 1 * PdfPageFormat.mm,
+                ),
+                build: (context) => _buildThermalLabel(item, barcodeGen, labelHeight),
+              ),
+            );
+          }
+        } else {
+          final pageWidth = labelsPerRow == 2
+              ? 85 * PdfPageFormat.mm
+              : 125 * PdfPageFormat.mm;
+
+          for (int i = 0; i < itemsToPrint.length; i += labelsPerRow) {
+            final rowItems = itemsToPrint.skip(i).take(labelsPerRow).toList();
+
+            pdf.addPage(
+              pw.Page(
+                pageFormat: PdfPageFormat(
+                  pageWidth,
+                  labelHeight * PdfPageFormat.mm,
+                  marginAll: 1 * PdfPageFormat.mm,
+                ),
+                build: (context) {
+                  return pw.Row(
+                    mainAxisAlignment: pw.MainAxisAlignment.spaceEvenly,
+                    children: rowItems.map((item) {
+                      return pw.Container(
+                        width: 38 * PdfPageFormat.mm,
+                        child: _buildThermalLabel(item, barcodeGen, labelHeight),
+                      );
+                    }).toList(),
+                  );
+                },
+              ),
+            );
+          }
+        }
+      } else {
+        const itemsPerPage = 4;
+        for (int i = 0; i < itemsToPrint.length; i += itemsPerPage) {
+          final pageItems = itemsToPrint.skip(i).take(itemsPerPage).toList();
+
+          pdf.addPage(
+            pw.Page(
+              pageFormat: PdfPageFormat.a4,
+              margin: const pw.EdgeInsets.all(20),
+              build: (context) {
+                return pw.Column(
+                  children: [
+                    pw.Row(
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
+                      children: [
+                        if (pageItems.isNotEmpty)
+                          pw.Expanded(child: _buildA4Label(pageItems[0], barcodeGen)),
+                        pw.SizedBox(width: 10),
+                        if (pageItems.length > 1)
+                          pw.Expanded(child: _buildA4Label(pageItems[1], barcodeGen))
+                        else
+                          pw.Expanded(child: pw.Container()),
+                      ],
+                    ),
+                    pw.SizedBox(height: 20),
+                    pw.Row(
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
+                      children: [
+                        if (pageItems.length > 2)
+                          pw.Expanded(child: _buildA4Label(pageItems[2], barcodeGen))
+                        else
+                          pw.Expanded(child: pw.Container()),
+                        pw.SizedBox(width: 10),
+                        if (pageItems.length > 3)
+                          pw.Expanded(child: _buildA4Label(pageItems[3], barcodeGen))
+                        else
+                          pw.Expanded(child: pw.Container()),
+                      ],
+                    ),
+                  ],
+                );
+              },
+            ),
+          );
+        }
+      }
+
+      await Printing.layoutPdf(
+        onLayout: (format) async => pdf.save(),
+        name: 'Tem_IMEI_${DateTime.now().millisecondsSinceEpoch}.pdf',
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Lỗi khi in tem IMEI: $e')),
+        );
+      }
+    }
+  }
+
+  pw.Widget _buildThermalLabel(Map<String, dynamic> item, Barcode barcodeGen, int labelHeight) {
+    final productId = item['product_id']?.toString() ?? '';
+    final imei = item['imei']?.toString() ?? '';
+    final productName = _getProductName(productId);
+
+    double titleFontSize;
+    double imeiFontSize;
+    double barcodeHeight;
+    int maxLines;
+
+    if (labelHeight <= 20) {
+      titleFontSize = 5;
+      imeiFontSize = 4;
+      barcodeHeight = 10;
+      maxLines = 1;
+    } else if (labelHeight <= 25) {
+      titleFontSize = 6;
+      imeiFontSize = 4.5;
+      barcodeHeight = 13;
+      maxLines = 1;
+    } else if (labelHeight <= 30) {
+      titleFontSize = 7;
+      imeiFontSize = 5;
+      barcodeHeight = 16;
+      maxLines = 1;
+    } else {
+      titleFontSize = 9;
+      imeiFontSize = 6;
+      barcodeHeight = 22;
+      maxLines = 2;
+    }
+
+    final enlargedImeiFontSize = imeiFontSize * 2;
+    final enlargedBarcodeHeight = barcodeHeight * 1.8;
+
+    return pw.Container(
+      decoration: pw.BoxDecoration(
+        border: pw.Border.all(color: PdfColors.black, width: 0.5),
+      ),
+      child: pw.Column(
+        mainAxisAlignment: pw.MainAxisAlignment.center,
+        children: [
+          pw.Padding(
+            padding: const pw.EdgeInsets.symmetric(horizontal: 2),
+            child: pw.Text(
+              productName,
+              style: pw.TextStyle(
+                fontSize: titleFontSize,
+                fontWeight: pw.FontWeight.bold,
+              ),
+              textAlign: pw.TextAlign.center,
+              maxLines: maxLines,
+              overflow: pw.TextOverflow.clip,
+            ),
+          ),
+          pw.SizedBox(height: 1),
+          pw.Container(
+            height: enlargedBarcodeHeight,
+            padding: const pw.EdgeInsets.symmetric(horizontal: 2),
+            child: pw.BarcodeWidget(
+              barcode: barcodeGen,
+              data: imei,
+              drawText: false,
+              width: 95,
+            ),
+          ),
+          pw.SizedBox(height: 1),
+          pw.Text(
+            imei,
+            style: pw.TextStyle(
+              fontSize: enlargedImeiFontSize,
+            ),
+            textAlign: pw.TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+
+  pw.Widget _buildA4Label(Map<String, dynamic> item, Barcode barcodeGen) {
+    final productId = item['product_id']?.toString() ?? '';
+    final imei = item['imei']?.toString() ?? '';
+    final productName = _getProductName(productId);
+
+    return pw.Container(
+      decoration: pw.BoxDecoration(
+        border: pw.Border.all(color: PdfColors.black, width: 1),
+        borderRadius: const pw.BorderRadius.all(pw.Radius.circular(4)),
+      ),
+      padding: const pw.EdgeInsets.all(8),
+      child: pw.Column(
+        mainAxisAlignment: pw.MainAxisAlignment.center,
+        children: [
+          pw.Text(
+            productName,
+            style: pw.TextStyle(
+              fontSize: 12,
+              fontWeight: pw.FontWeight.bold,
+            ),
+            textAlign: pw.TextAlign.center,
+            maxLines: 2,
+            overflow: pw.TextOverflow.clip,
+          ),
+          pw.SizedBox(height: 8),
+          pw.Container(
+            height: 100,
+            child: pw.BarcodeWidget(
+              barcode: barcodeGen,
+              data: imei,
+              drawText: false,
+            ),
+          ),
+          pw.SizedBox(height: 4),
+          pw.Text(
+            imei,
+            style: pw.TextStyle(
+              fontSize: 18,
+            ),
+            textAlign: pw.TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// Widget dialog cài đặt in tem (giống inventory_screen.dart)
+class _PrintSettingsDialog extends StatefulWidget {
+  final String defaultPrintType;
+  final int defaultLabelsPerRow;
+  final int defaultLabelHeight;
+
+  const _PrintSettingsDialog({
+    required this.defaultPrintType,
+    required this.defaultLabelsPerRow,
+    required this.defaultLabelHeight,
+  });
+
+  @override
+  State<_PrintSettingsDialog> createState() => _PrintSettingsDialogState();
+}
+
+class _PrintSettingsDialogState extends State<_PrintSettingsDialog> {
+  late String _selectedPrintType;
+  late int _selectedLabelsPerRow;
+  late int _selectedLabelHeight;
+  bool _saveAsDefault = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedPrintType = widget.defaultPrintType;
+    _selectedLabelsPerRow = widget.defaultLabelsPerRow;
+    _selectedLabelHeight = widget.defaultLabelHeight;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'Loại máy in:',
+          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+        ),
+        const SizedBox(height: 8),
+        RadioListTile<String>(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Máy in thông thường (A4)'),
+          subtitle: const Text('In 4 tem trên 1 tờ giấy A4', style: TextStyle(fontSize: 12)),
+          value: 'a4',
+          groupValue: _selectedPrintType,
+          onChanged: (value) {
+            setState(() {
+              _selectedPrintType = value!;
+            });
+          },
+        ),
+        RadioListTile<String>(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Máy in tem nhiệt'),
+          subtitle: const Text('Cuộn tem nhãn (mọi loại máy)', style: TextStyle(fontSize: 12)),
+          value: 'thermal',
+          groupValue: _selectedPrintType,
+          onChanged: (value) {
+            setState(() {
+              _selectedPrintType = value!;
+            });
+          },
+        ),
+        // Tạm thời ẩn Bluetooth trên iOS do package có bug
+        if (!Platform.isIOS)
+          RadioListTile<String>(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            title: const Text('In qua Bluetooth'),
+            subtitle: const Text('Kết nối trực tiếp với máy in Bluetooth (CLabel CT221B)', style: TextStyle(fontSize: 12)),
+            value: 'bluetooth',
+            groupValue: _selectedPrintType,
+            onChanged: (value) {
+              setState(() {
+                _selectedPrintType = value!;
+              });
+            },
+          ),
+        if (Platform.isIOS)
+          RadioListTile<String>(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            title: const Text('In qua Bluetooth (iOS - Tạm thời không khả dụng)'),
+            subtitle: const Text('Tính năng này đang được phát triển cho iOS. Vui lòng sử dụng in PDF/thermal.', style: TextStyle(fontSize: 12, color: Colors.orange)),
+            value: 'bluetooth_disabled',
+            groupValue: 'bluetooth_disabled',
+            onChanged: null, // Disabled
+          ),
+        if (_selectedPrintType == 'thermal') ...[
+          const Divider(),
+          const SizedBox(height: 8),
+          const Text(
+            'Chiều cao tem (mm):',
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+          ),
+          const SizedBox(height: 8),
+          RadioListTile<int>(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            title: const Text('20mm'),
+            value: 20,
+            groupValue: _selectedLabelHeight,
+            onChanged: (value) {
+              setState(() {
+                _selectedLabelHeight = value!;
+              });
+            },
+          ),
+          RadioListTile<int>(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            title: const Text('25mm'),
+            value: 25,
+            groupValue: _selectedLabelHeight,
+            onChanged: (value) {
+              setState(() {
+                _selectedLabelHeight = value!;
+              });
+            },
+          ),
+          RadioListTile<int>(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            title: const Text('30mm'),
+            value: 30,
+            groupValue: _selectedLabelHeight,
+            onChanged: (value) {
+              setState(() {
+                _selectedLabelHeight = value!;
+              });
+            },
+          ),
+          RadioListTile<int>(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            title: const Text('40mm'),
+            value: 40,
+            groupValue: _selectedLabelHeight,
+            onChanged: (value) {
+              setState(() {
+                _selectedLabelHeight = value!;
+              });
+            },
+          ),
+          const Divider(),
+          const SizedBox(height: 8),
+          const Text(
+            'Số tem trên 1 hàng:',
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+          ),
+          const SizedBox(height: 8),
+          RadioListTile<int>(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            title: const Text('1 tem/hàng'),
+            value: 1,
+            groupValue: _selectedLabelsPerRow,
+            onChanged: (value) {
+              setState(() {
+                _selectedLabelsPerRow = value!;
+              });
+            },
+          ),
+          RadioListTile<int>(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            title: const Text('2 tem/hàng'),
+            value: 2,
+            groupValue: _selectedLabelsPerRow,
+            onChanged: (value) {
+              setState(() {
+                _selectedLabelsPerRow = value!;
+              });
+            },
+          ),
+          RadioListTile<int>(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            title: const Text('3 tem/hàng'),
+            value: 3,
+            groupValue: _selectedLabelsPerRow,
+            onChanged: (value) {
+              setState(() {
+                _selectedLabelsPerRow = value!;
+              });
+            },
+          ),
+        ],
+        const Divider(),
+        const SizedBox(height: 8),
+        CheckboxListTile(
+          dense: true,
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Ghi nhớ và dùng làm mặc định'),
+          value: _saveAsDefault,
+          onChanged: (value) {
+            setState(() {
+              _saveAsDefault = value ?? false;
+            });
+          },
+        ),
+        const SizedBox(height: 16),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Hủy'),
+            ),
+            const SizedBox(width: 8),
+            ElevatedButton.icon(
+              onPressed: () {
+                // Nếu chọn Bluetooth, không cần labelsPerRow và labelHeight
+                Navigator.pop(context, {
+                  'printType': _selectedPrintType,
+                  'labelsPerRow': _selectedPrintType == 'bluetooth' ? 1 : _selectedLabelsPerRow,
+                  'labelHeight': _selectedPrintType == 'bluetooth' ? 30 : _selectedLabelHeight,
+                  'saveAsDefault': _saveAsDefault,
+                });
+              },
+              icon: const Icon(Icons.print),
+              label: const Text('In Tem'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.green,
+                foregroundColor: Colors.white,
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }

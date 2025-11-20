@@ -349,10 +349,11 @@ class _TransporterDetailsDialogState extends State<TransporterDetailsDialog> {
           .eq('transporter', transporterName)
           .eq('iscancelled', false);
 
+      // ✅ Query reimport_orders COD hoàn (sẽ filter theo transporter sau)
       dynamic reimportOrdersQuery = widget.tenantClient
           .from('reimport_orders')
-          .select('*, product_id')
-          .eq('account', 'COD Hoàn')
+          .select('*, product_id, customer_price, transporter_price')
+          .eq('account', 'Cod hoàn') // ✅ Sử dụng 'Cod hoàn' (chữ thường) như trong database
           .eq('iscancelled', false);
 
       // Add date filters if dates are selected
@@ -403,7 +404,16 @@ class _TransporterDetailsDialogState extends State<TransporterDetailsDialog> {
 
       final financialOrders = (results[1] as List<dynamic>)
           .cast<Map<String, dynamic>>()
-          .map((order) => {...order, 'type': 'Chi Thanh Toán Đối Tác'})
+          .map((order) {
+            // ✅ Phân biệt giữa payment (chi) và receive (thu)
+            final orderType = order['type']?.toString() ?? '';
+            final displayType = orderType == 'payment' 
+                ? 'Chi Thanh Toán Đối Tác' 
+                : orderType == 'receive'
+                    ? 'Phiếu Thu Tiền Đối Tác'
+                    : 'Chi Thanh Toán Đối Tác'; // Fallback
+            return {...order, 'type': displayType};
+          })
           .toList();
       developer.log('Financial Orders: ${financialOrders.length}, First order: ${financialOrders.isNotEmpty ? financialOrders.first : "none"}');
 
@@ -417,15 +427,56 @@ class _TransporterDetailsDialogState extends State<TransporterDetailsDialog> {
           .toList();
       developer.log('Sale Orders: ${saleOrders.length}, First order: ${saleOrders.isNotEmpty ? saleOrders.first : "none"}');
 
-      final reimportOrders = (results[3] as List<dynamic>)
-          .cast<Map<String, dynamic>>()
-          .map((order) => {
-                ...order,
-                'type': 'Phiếu Nhập Lại Hàng',
-                'product_name': CacheUtil.getProductName(order['product_id']?.toString()),
-              })
+      // ✅ Filter reimport_orders COD hoàn theo transporter từ products
+      final reimportOrdersRaw = (results[3] as List<dynamic>).cast<Map<String, dynamic>>();
+      final List<Map<String, dynamic>> reimportOrders = [];
+      
+      // ✅ Tối ưu: Lấy tất cả IMEI trước, sau đó query products một lần
+      final allImeis = reimportOrdersRaw
+          .map((order) => order['imei']?.toString())
+          .whereType<String>()
+          .where((imei) => imei.isNotEmpty)
           .toList();
-      developer.log('Reimport Orders: ${reimportOrders.length}, First order: ${reimportOrders.isNotEmpty ? reimportOrders.first : "none"}');
+      
+      // Query products với tất cả IMEI để lấy transporter
+      Map<String, String?> imeiToTransporter = {};
+      if (allImeis.isNotEmpty) {
+        try {
+          // Chia thành batch để tránh query quá lớn
+          for (int i = 0; i < allImeis.length; i += 100) {
+            final batchImeis = allImeis.skip(i).take(100).toList();
+            final productsResponse = await widget.tenantClient
+                .from('products')
+                .select('imei, transporter')
+                .inFilter('imei', batchImeis);
+            
+            for (var product in productsResponse) {
+              final imei = product['imei']?.toString();
+              final transporter = product['transporter']?.toString();
+              if (imei != null) {
+                imeiToTransporter[imei] = transporter;
+              }
+            }
+          }
+        } catch (e) {
+          developer.log('Error fetching transporters for IMEIs: $e');
+        }
+      }
+      
+      // Filter reimport_orders theo transporter
+      for (var order in reimportOrdersRaw) {
+        final imei = order['imei']?.toString() ?? '';
+        final productTransporter = imeiToTransporter[imei];
+        // ✅ Chỉ thêm vào danh sách nếu transporter trùng với transporter đang xem
+        if (productTransporter == transporterName) {
+          reimportOrders.add({
+            ...order,
+            'type': 'Phiếu Nhập Lại Hàng (COD Hoàn)',
+            'product_name': CacheUtil.getProductName(order['product_id']?.toString()),
+          });
+        }
+      }
+      developer.log('Reimport Orders (COD Hoàn) for transporter "$transporterName": ${reimportOrders.length}');
 
       final newTransactions = [...transporterOrders, ...financialOrders, ...saleOrders, ...reimportOrders];
 
@@ -517,10 +568,11 @@ class _TransporterDetailsDialogState extends State<TransporterDetailsDialog> {
             .eq('iscancelled', false)
             .order('created_at', ascending: false);
 
+        // ✅ Query reimport_orders COD hoàn (sẽ filter theo transporter sau)
         final reimportOrdersFuture = widget.tenantClient
             .from('reimport_orders')
-            .select('*, product_id')
-            .eq('account', 'COD Hoàn')
+            .select('*, product_id, customer_price, transporter_price')
+            .eq('account', 'Cod hoàn') // ✅ Sử dụng 'Cod hoàn' (chữ thường) như trong database
             .eq('iscancelled', false)
             .order('created_at', ascending: false);
 
@@ -548,7 +600,16 @@ class _TransporterDetailsDialogState extends State<TransporterDetailsDialog> {
 
         final financialOrders = (results[1] as List<dynamic>)
             .cast<Map<String, dynamic>>()
-            .map((order) => {...order, 'type': 'Chi Thanh Toán Đối Tác'})
+            .map((order) {
+              // ✅ Phân biệt giữa payment (chi) và receive (thu)
+              final orderType = order['type']?.toString() ?? '';
+              final displayType = orderType == 'payment' 
+                  ? 'Chi Thanh Toán Đối Tác' 
+                  : orderType == 'receive'
+                      ? 'Phiếu Thu Tiền Đối Tác'
+                      : 'Chi Thanh Toán Đối Tác'; // Fallback
+              return {...order, 'type': displayType};
+            })
             .toList();
 
         final saleOrders = (results[2] as List<dynamic>)
@@ -560,14 +621,55 @@ class _TransporterDetailsDialogState extends State<TransporterDetailsDialog> {
                 })
             .toList();
 
-        final reimportOrders = (results[3] as List<dynamic>)
-            .cast<Map<String, dynamic>>()
-            .map((order) => {
-                  ...order,
-                  'type': 'Phiếu Nhập Lại Hàng',
-                  'product_name': CacheUtil.getProductName(order['product_id']?.toString()),
-                })
+        // ✅ Filter reimport_orders COD hoàn theo transporter từ products
+        final reimportOrdersRaw = (results[3] as List<dynamic>).cast<Map<String, dynamic>>();
+        final List<Map<String, dynamic>> reimportOrders = [];
+        
+        // ✅ Tối ưu: Lấy tất cả IMEI trước, sau đó query products một lần
+        final allImeis = reimportOrdersRaw
+            .map((order) => order['imei']?.toString())
+            .whereType<String>()
+            .where((imei) => imei.isNotEmpty)
             .toList();
+        
+        // Query products với tất cả IMEI để lấy transporter
+        Map<String, String?> imeiToTransporter = {};
+        if (allImeis.isNotEmpty) {
+          try {
+            // Chia thành batch để tránh query quá lớn
+            for (int i = 0; i < allImeis.length; i += 100) {
+              final batchImeis = allImeis.skip(i).take(100).toList();
+              final productsResponse = await widget.tenantClient
+                  .from('products')
+                  .select('imei, transporter')
+                  .inFilter('imei', batchImeis);
+              
+              for (var product in productsResponse) {
+                final imei = product['imei']?.toString();
+                final transporter = product['transporter']?.toString();
+                if (imei != null) {
+                  imeiToTransporter[imei] = transporter;
+                }
+              }
+            }
+          } catch (e) {
+            developer.log('Error fetching transporters for IMEIs: $e');
+          }
+        }
+        
+        // Filter reimport_orders theo transporter
+        for (var order in reimportOrdersRaw) {
+          final imei = order['imei']?.toString() ?? '';
+          final productTransporter = imeiToTransporter[imei];
+          // ✅ Chỉ thêm vào danh sách nếu transporter trùng với transporter đang xem
+          if (productTransporter == transporterName) {
+            reimportOrders.add({
+              ...order,
+              'type': 'Phiếu Nhập Lại Hàng (COD Hoàn)',
+              'product_name': CacheUtil.getProductName(order['product_id']?.toString()),
+            });
+          }
+        }
 
         exportTransactions = [...transporterOrders, ...financialOrders, ...saleOrders, ...reimportOrders];
         exportTransactions.sort((a, b) {
@@ -604,7 +706,7 @@ class _TransporterDetailsDialogState extends State<TransporterDetailsDialog> {
         currentRow++;
       }
 
-      final headers = ['Loại giao dịch', 'Ngày', 'Sản phẩm', 'IMEI', 'Số tiền', 'Đơn vị tiền'];
+      final headers = ['Loại giao dịch', 'Ngày', 'Sản phẩm', 'IMEI', 'Số tiền', 'Đơn vị tiền', 'Tiền cọc', 'Tiền COD'];
       final columnCount = headers.length;
       final sizingTracker = ExcelSizingTracker(columnCount);
       final styles = ExcelCellStyles.build();
@@ -632,18 +734,27 @@ class _TransporterDetailsDialogState extends State<TransporterDetailsDialog> {
         final imeiStr = transaction['imei']?.toString() ?? '';
         final imeiList = imeiStr.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
         
+        // ✅ Kiểm tra nếu là sale_orders với account == 'Ship COD' hoặc reimport_orders COD hoàn
+        final isShipCod = type == 'Phiếu Bán Hàng' && 
+            transaction['account']?.toString() == 'Ship COD';
+        final isCodHoan = type == 'Phiếu Nhập Lại Hàng (COD Hoàn)' || 
+            (type == 'Phiếu Nhập Lại Hàng' && transaction['account']?.toString() == 'Cod hoàn');
+        final customerPriceTotal = (isShipCod || isCodHoan) ? (transaction['customer_price'] as num?) : null;
+        final transporterPriceTotal = (isShipCod || isCodHoan) ? (transaction['transporter_price'] as num?) : null;
+        
         // ✅ Kiểm tra xem transaction có IMEI không (các phiếu vận chuyển, bán hàng, nhập lại)
         final hasImei = imeiList.isNotEmpty && 
             (type == 'Phiếu Chuyển Kho Quốc Tế' || 
              type == 'Phiếu Chuyển Kho Nội Địa' || 
              type == 'Phiếu Nhập Kho Vận Chuyển' || 
              type == 'Phiếu Bán Hàng' || 
-             type == 'Phiếu Nhập Lại Hàng');
+             type == 'Phiếu Nhập Lại Hàng' ||
+             type == 'Phiếu Nhập Lại Hàng (COD Hoàn)');
 
         // Tính số tiền cho mỗi IMEI
         num totalAmount = transaction['transport_fee'] ?? transaction['amount'] ?? transaction['price'] ?? 0;
         num amountPerImei;
-        if (type == 'Phiếu Bán Hàng' || type == 'Phiếu Nhập Lại Hàng') {
+        if (type == 'Phiếu Bán Hàng' || type == 'Phiếu Nhập Lại Hàng' || type == 'Phiếu Nhập Lại Hàng (COD Hoàn)') {
           // Với phiếu có price, mỗi IMEI = price (đơn giá)
           amountPerImei = transaction['price'] as num? ?? 0;
         } else if (type == 'Phiếu Chuyển Kho Quốc Tế' || type == 'Phiếu Chuyển Kho Nội Địa' || type == 'Phiếu Nhập Kho Vận Chuyển') {
@@ -656,6 +767,24 @@ class _TransporterDetailsDialogState extends State<TransporterDetailsDialog> {
         }
         final formattedAmountPerImei = formatNumber(amountPerImei);
         final formattedAmount = formatNumber(totalAmount);
+        
+        // Tính tiền cọc và tiền COD cho mỗi IMEI (chia đều như số tiền)
+        String formattedCustomerPrice = '';
+        String formattedTransporterPrice = '';
+        if ((isShipCod || isCodHoan) && customerPriceTotal != null && transporterPriceTotal != null) {
+          if (hasImei && imeiList.isNotEmpty) {
+            // Chia đều cho số lượng IMEI
+            final imeiCount = imeiList.length;
+            final customerPricePerImei = customerPriceTotal / imeiCount;
+            final transporterPricePerImei = transporterPriceTotal / imeiCount;
+            formattedCustomerPrice = formatNumber(customerPricePerImei);
+            formattedTransporterPrice = formatNumber(transporterPricePerImei);
+          } else {
+            // Không có IMEI, dùng tổng
+            formattedCustomerPrice = formatNumber(customerPriceTotal);
+            formattedTransporterPrice = formatNumber(transporterPriceTotal);
+          }
+        }
 
         if (hasImei && imeiList.isNotEmpty) {
           // ✅ Mỗi IMEI là 1 dòng riêng - tách sản phẩm và IMEI thành 2 cột
@@ -667,6 +796,8 @@ class _TransporterDetailsDialogState extends State<TransporterDetailsDialog> {
               singleImei,
               formattedAmountPerImei,
               currency,
+              formattedCustomerPrice,
+              formattedTransporterPrice,
             ];
 
             for (int columnIndex = 0; columnIndex < columnCount; columnIndex++) {
@@ -693,6 +824,8 @@ class _TransporterDetailsDialogState extends State<TransporterDetailsDialog> {
             '',
             formattedAmount,
             currency,
+            formattedCustomerPrice,
+            formattedTransporterPrice,
           ];
 
           for (int columnIndex = 0; columnIndex < columnCount; columnIndex++) {
@@ -857,23 +990,39 @@ class _TransporterDetailsDialogState extends State<TransporterDetailsDialog> {
                                 final currency = transaction['currency']?.toString() ?? 'VND';
                                 final formattedAmount = formatNumber(amount);
                                 final productName = transaction['product_name'] ?? 'Không xác định';
+                                
+                                // Kiểm tra nếu là sale_orders với account == 'Ship COD' hoặc reimport_orders COD hoàn
+                                final isShipCod = type == 'Phiếu Bán Hàng' && 
+                                    transaction['account']?.toString() == 'Ship COD';
+                                final isCodHoan = type == 'Phiếu Nhập Lại Hàng (COD Hoàn)' || 
+                                    (type == 'Phiếu Nhập Lại Hàng' && transaction['account']?.toString() == 'Cod hoàn');
+                                final customerPrice = (isShipCod || isCodHoan) ? (transaction['customer_price'] as num?) : null;
+                                final transporterPrice = (isShipCod || isCodHoan) ? (transaction['transporter_price'] as num?) : null;
+                                
                                 final details = type == 'Phiếu Chuyển Kho Quốc Tế' ||
                                         type == 'Phiếu Chuyển Kho Nội Địa' ||
                                         type == 'Phiếu Nhập Kho Vận Chuyển'
                                     ? 'Sản phẩm: $productName, IMEI: ${transaction['imei']}'
                                     : type == 'Phiếu Bán Hàng'
                                         ? 'Sản phẩm: $productName, IMEI: ${transaction['imei']}'
-                                        : type == 'Phiếu Nhập Lại Hàng'
+                                        : type == 'Phiếu Nhập Lại Hàng (COD Hoàn)' || type == 'Phiếu Nhập Lại Hàng'
                                             ? 'Sản phẩm: $productName, IMEI: ${transaction['imei']}, Số lượng: ${transaction['quantity']}'
-                                            : type == 'Chi Thanh Toán Đối Tác'
+                                            : type == 'Chi Thanh Toán Đối Tác' || type == 'Phiếu Thu Tiền Đối Tác'
                                                 ? 'Tài khoản: ${transaction['account']}, Ghi chú: ${transaction['note'] ?? ''}'
                                                 : '';
+
+                                // Xây dựng text hiển thị số tiền
+                                String amountText = 'Số tiền: $formattedAmount $currency';
+                                if ((isShipCod || isCodHoan) && customerPrice != null && transporterPrice != null) {
+                                  amountText = 'Tiền cọc: ${formatNumber(customerPrice)} $currency\n'
+                                      'Tiền COD: ${formatNumber(transporterPrice)} $currency';
+                                }
 
                                 return Card(
                                   margin: const EdgeInsets.symmetric(vertical: 4),
                                   child: ListTile(
                                     title: Text('$type - $createdAt'),
-                                    subtitle: Text('$details\nSố tiền: $formattedAmount $currency'),
+                                    subtitle: Text('$details\n$amountText'),
                                   ),
                                 );
                               },

@@ -15,9 +15,9 @@ import 'forms/income_other_form.dart';
 import 'forms/cost_form.dart';
 import 'forms/exchange_form.dart';
 import 'forms/transfer_fund_form.dart';
-import 'forms/financial_account_form.dart';
 import 'forms/warehouse_form.dart';
 import 'forms/reimport_form.dart';
+import 'forms/cod_return_form.dart';
 
 class TransactionScreen extends StatelessWidget {
   final List<String> permissions;
@@ -35,43 +35,40 @@ class TransactionScreen extends StatelessWidget {
     IconData icon,
     Widget page,
     Color color,
-    bool hasPermission,
   ) {
-    return hasPermission
-        ? GestureDetector(
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => page),
-            ),
-            child: Container(
-              decoration: BoxDecoration(
-                color: color.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: color.withOpacity(0.5)),
+    return GestureDetector(
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => page),
+      ),
+      child: Container(
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: color.withOpacity(0.5)),
+        ),
+        padding: const EdgeInsets.all(10),
+        child: FittedBox(
+          fit: BoxFit.scaleDown,
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              CircleAvatar(
+                backgroundColor: color,
+                radius: 18,
+                child: Icon(icon, color: Colors.white, size: 18),
               ),
-              padding: const EdgeInsets.all(10),
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    CircleAvatar(
-                      backgroundColor: color,
-                      radius: 18,
-                      child: Icon(icon, color: Colors.white, size: 18),
-                    ),
-                    const SizedBox(height: 10),
-                    Text(
-                      label,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
-                    ),
-                  ],
-                ),
+              const SizedBox(height: 10),
+              Text(
+                label,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
               ),
-            ),
-          )
-        : const SizedBox.shrink();
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   bool _hasAnyPermissionForTab(List<String> requiredPermissions) {
@@ -112,7 +109,6 @@ class TransactionScreen extends StatelessWidget {
       'access_cost_form',
       'access_exchange_form',
       'access_transfer_fund_form',
-      'access_financial_account_form',
     ];
 
     return DefaultTabController(
@@ -139,180 +135,208 @@ class TransactionScreen extends StatelessWidget {
         body: TabBarView(
           children: [
             _hasAnyPermissionForTab(buySellPermissions)
-                ? GridView.count(
-                    padding: const EdgeInsets.all(12),
-                    crossAxisCount: 3,
-                    crossAxisSpacing: 10,
-                    mainAxisSpacing: 10,
-                    childAspectRatio: 1.0,
-                    children: [
-                      _buildTile(
-                        context,
-                        'Nhập hàng',
-                        Icons.download,
-                        ImportForm(tenantClient: tenantClient),
-                        Colors.green,
-                        permissions.contains('access_import_form'),
-                      ),
-                      _buildTile(
-                        context,
-                        'Trả hàng',
-                        Icons.undo,
-                        ReturnForm(tenantClient: tenantClient),
-                        Colors.orange,
-                        permissions.contains('access_return_form'),
-                      ),
-                      _buildTile(
-                        context,
-                        'Bán hàng',
-                        Icons.point_of_sale,
-                        SaleForm(tenantClient: tenantClient),
-                        Colors.blue,
-                        permissions.contains('access_sale_form'),
-                      ),
-                      _buildTile(
-                        context,
-                        'Gửi fix lỗi',
-                        Icons.build,
-                        FixSendForm(tenantClient: tenantClient),
-                        Colors.deepPurple,
-                        permissions.contains('access_fix_send_form'),
-                      ),
-                      _buildTile(
-                        context,
-                        'Nhận fix về',
-                        Icons.assignment_turned_in,
-                        FixReceiveForm(tenantClient: tenantClient),
-                        Colors.teal,
-                        permissions.contains('access_fix_receive_form'),
-                      ),
-                      _buildTile(
-                        context,
-                        'Nhập lại hàng',
-                        Icons.replay,
-                        ReimportForm(tenantClient: tenantClient),
-                        Colors.brown,
-                        permissions.contains('access_reimport_form'),
-                      ),
-                    ],
+                ? Builder(
+                    builder: (context) {
+                      final tiles = <Widget>[];
+                      if (permissions.contains('access_import_form')) {
+                        tiles.add(_buildTile(
+                          context,
+                          'Nhập hàng',
+                          Icons.download,
+                          ImportForm(tenantClient: tenantClient),
+                          Colors.green,
+                        ));
+                      }
+                      if (permissions.contains('access_return_form')) {
+                        tiles.add(_buildTile(
+                          context,
+                          'Trả hàng',
+                          Icons.undo,
+                          ReturnForm(tenantClient: tenantClient),
+                          Colors.orange,
+                        ));
+                      }
+                      if (permissions.contains('access_sale_form')) {
+                        tiles.add(_buildTile(
+                          context,
+                          'Bán hàng',
+                          Icons.point_of_sale,
+                          SaleForm(tenantClient: tenantClient),
+                          Colors.blue,
+                        ));
+                      }
+                      if (permissions.contains('access_fix_send_form')) {
+                        tiles.add(_buildTile(
+                          context,
+                          'Gửi fix lỗi',
+                          Icons.build,
+                          FixSendForm(tenantClient: tenantClient),
+                          Colors.deepPurple,
+                        ));
+                      }
+                      if (permissions.contains('access_fix_receive_form')) {
+                        tiles.add(_buildTile(
+                          context,
+                          'Nhận fix về',
+                          Icons.assignment_turned_in,
+                          FixReceiveForm(tenantClient: tenantClient),
+                          Colors.teal,
+                        ));
+                      }
+                      if (permissions.contains('access_reimport_form')) {
+                        tiles.add(_buildTile(
+                          context,
+                          'Nhập lại hàng',
+                          Icons.replay,
+                          ReimportForm(tenantClient: tenantClient),
+                          Colors.brown,
+                        ));
+                        tiles.add(_buildTile(
+                          context,
+                          'Cod Hoàn Hàng',
+                          Icons.assignment_return,
+                          CodReturnForm(tenantClient: tenantClient),
+                          Colors.deepPurpleAccent,
+                        ));
+                      }
+                      return GridView.count(
+                        padding: const EdgeInsets.all(12),
+                        crossAxisCount: 3,
+                        crossAxisSpacing: 10,
+                        mainAxisSpacing: 10,
+                        childAspectRatio: 1.0,
+                        children: tiles,
+                      );
+                    },
                   )
                 : _buildEmptyTabMessage('Mua / Bán'),
             _hasAnyPermissionForTab(transportPermissions)
-                ? GridView.count(
-                    padding: const EdgeInsets.all(12),
-                    crossAxisCount: 3,
-                    crossAxisSpacing: 10,
-                    mainAxisSpacing: 10,
-                    childAspectRatio: 1.0,
-                    children: [
-                      _buildTile(
-                        context,
-                        'Chuyển nội địa',
-                        Icons.local_shipping,
-                        TransferLocalForm(tenantClient: tenantClient),
-                        Colors.orangeAccent,
-                        permissions.contains('access_transfer_local_form'),
-                      ),
-                      _buildTile(
-                        context,
-                        'Chuyển quốc tế',
-                        Icons.flight_takeoff,
-                        TransferGlobalForm(tenantClient: tenantClient),
-                        Colors.pink,
-                        permissions.contains('access_transfer_global_form'),
-                      ),
-                      _buildTile(
-                        context,
-                        'Nhập kho VC',
-                        Icons.inventory,
-                        TransferReceiveForm(tenantClient: tenantClient),
-                        Colors.deepOrange,
-                        permissions.contains('access_transfer_receive_form'),
-                      ),
-                      _buildTile(
-                        context,
-                        'Cước vận chuyển',
-                        Icons.price_change,
-                        TransferFeeForm(tenantClient: tenantClient),
-                        Colors.green,
-                        permissions.contains('access_transfer_fee_form'),
-                      ),
-                      _buildTile(
-                        context,
-                        'Thêm / Sửa kho',
-                        Icons.warehouse,
-                        WarehouseForm(tenantClient: tenantClient),
-                        Colors.indigo,
-                        permissions.contains('access_warehouse_form'),
-                      ),
-                    ],
+                ? Builder(
+                    builder: (context) {
+                      final tiles = <Widget>[];
+                      if (permissions.contains('access_transfer_local_form')) {
+                        tiles.add(_buildTile(
+                          context,
+                          'Chuyển nội địa',
+                          Icons.local_shipping,
+                          TransferLocalForm(tenantClient: tenantClient),
+                          Colors.orangeAccent,
+                        ));
+                      }
+                      if (permissions.contains('access_transfer_global_form')) {
+                        tiles.add(_buildTile(
+                          context,
+                          'Chuyển quốc tế',
+                          Icons.flight_takeoff,
+                          TransferGlobalForm(tenantClient: tenantClient),
+                          Colors.pink,
+                        ));
+                      }
+                      if (permissions.contains('access_transfer_receive_form')) {
+                        tiles.add(_buildTile(
+                          context,
+                          'Nhập kho VC',
+                          Icons.inventory,
+                          TransferReceiveForm(tenantClient: tenantClient),
+                          Colors.deepOrange,
+                        ));
+                      }
+                      if (permissions.contains('access_transfer_fee_form')) {
+                        tiles.add(_buildTile(
+                          context,
+                          'Cước vận chuyển',
+                          Icons.price_change,
+                          TransferFeeForm(tenantClient: tenantClient),
+                          Colors.green,
+                        ));
+                      }
+                      if (permissions.contains('access_warehouse_form')) {
+                        tiles.add(_buildTile(
+                          context,
+                          'Thêm / Sửa kho',
+                          Icons.warehouse,
+                          WarehouseForm(tenantClient: tenantClient),
+                          Colors.indigo,
+                        ));
+                      }
+                      return GridView.count(
+                        padding: const EdgeInsets.all(12),
+                        crossAxisCount: 3,
+                        crossAxisSpacing: 10,
+                        mainAxisSpacing: 10,
+                        childAspectRatio: 1.0,
+                        children: tiles,
+                      );
+                    },
                   )
                 : _buildEmptyTabMessage('Vận chuyển'),
             _hasAnyPermissionForTab(financePermissions)
-                ? GridView.count(
-                    padding: const EdgeInsets.all(12),
-                    crossAxisCount: 3,
-                    crossAxisSpacing: 10,
-                    mainAxisSpacing: 10,
-                    childAspectRatio: 1.0,
-                    children: [
-                      _buildTile(
-                        context,
-                        'Chi đối tác',
-                        Icons.money_off,
-                        PaymentForm(tenantClient: tenantClient),
-                        Colors.redAccent,
-                        permissions.contains('access_payment_form'),
-                      ),
-                      _buildTile(
-                        context,
-                        'Thu đối tác',
-                        Icons.attach_money,
-                        ReceiveForm(tenantClient: tenantClient),
-                        Colors.green,
-                        permissions.contains('access_receive_form'),
-                      ),
-                      _buildTile(
-                        context,
-                        'Thu nhập khác',
-                        Icons.add_card,
-                        IncomeOtherForm(tenantClient: tenantClient),
-                        Colors.lightBlue,
-                        permissions.contains('access_income_other_form'),
-                      ),
-                      _buildTile(
-                        context,
-                        'Chi phí',
-                        Icons.money_off_csred,
-                        CostForm(tenantClient: tenantClient),
-                        Colors.deepOrange,
-                        permissions.contains('access_cost_form'),
-                      ),
-                      _buildTile(
-                        context,
-                        'Đổi tiền',
-                        Icons.currency_exchange,
-                        ExchangeForm(tenantClient: tenantClient),
-                        Colors.amber,
-                        permissions.contains('access_exchange_form'),
-                      ),
-                      _buildTile(
-                        context,
-                        'Chuyển quỹ',
-                        Icons.account_balance_wallet,
-                        TransferFundForm(tenantClient: tenantClient),
-                        Colors.indigo,
-                        permissions.contains('access_transfer_fund_form'),
-                      ),
-                      _buildTile(
-                        context,
-                        'TK Thanh Toán',
-                        Icons.account_balance,
-                        FinancialAccountForm(tenantClient: tenantClient),
-                        Colors.purple,
-                        permissions.contains('access_financial_account_form'),
-                      ),
-                    ],
+                ? Builder(
+                    builder: (context) {
+                      final tiles = <Widget>[];
+                      if (permissions.contains('access_payment_form')) {
+                        tiles.add(_buildTile(
+                          context,
+                          'Chi đối tác',
+                          Icons.money_off,
+                          PaymentForm(tenantClient: tenantClient),
+                          Colors.redAccent,
+                        ));
+                      }
+                      if (permissions.contains('access_receive_form')) {
+                        tiles.add(_buildTile(
+                          context,
+                          'Thu đối tác',
+                          Icons.attach_money,
+                          ReceiveForm(tenantClient: tenantClient),
+                          Colors.green,
+                        ));
+                      }
+                      if (permissions.contains('access_income_other_form')) {
+                        tiles.add(_buildTile(
+                          context,
+                          'Thu nhập khác',
+                          Icons.add_card,
+                          IncomeOtherForm(tenantClient: tenantClient),
+                          Colors.lightBlue,
+                        ));
+                      }
+                      if (permissions.contains('access_cost_form')) {
+                        tiles.add(_buildTile(
+                          context,
+                          'Chi phí',
+                          Icons.money_off_csred,
+                          CostForm(tenantClient: tenantClient),
+                          Colors.deepOrange,
+                        ));
+                      }
+                      if (permissions.contains('access_exchange_form')) {
+                        tiles.add(_buildTile(
+                          context,
+                          'Đổi tiền',
+                          Icons.currency_exchange,
+                          ExchangeForm(tenantClient: tenantClient),
+                          Colors.amber,
+                        ));
+                      }
+                      if (permissions.contains('access_transfer_fund_form')) {
+                        tiles.add(_buildTile(
+                          context,
+                          'Chuyển quỹ',
+                          Icons.account_balance_wallet,
+                          TransferFundForm(tenantClient: tenantClient),
+                          Colors.indigo,
+                        ));
+                      }
+                      return GridView.count(
+                        padding: const EdgeInsets.all(12),
+                        crossAxisCount: 3,
+                        crossAxisSpacing: 10,
+                        mainAxisSpacing: 10,
+                        childAspectRatio: 1.0,
+                        children: tiles,
+                      );
+                    },
                   )
                 : _buildEmptyTabMessage('Tài chính'),
           ],

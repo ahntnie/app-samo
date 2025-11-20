@@ -10,9 +10,15 @@ import 'package:printing/printing.dart';
 import 'package:barcode/barcode.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
+import 'package:flutter/services.dart' show rootBundle, Clipboard, ClipboardData;
 import '../helpers/global_cache_manager.dart';
 import '../helpers/storage_helper.dart';
 import '../helpers/excel_style_helper.dart';
+import '../helpers/bluetooth_print_helper.dart';
+import 'customers_screen.dart';
+import 'suppliers_screen.dart';
+import 'transporters_screen.dart';
+import 'fixers_screen.dart';
 
 // Backward compatibility alias
 class CacheUtil {
@@ -65,7 +71,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
   Map<int, TextEditingController> noteControllers = {};
   
   // Lưu lựa chọn mặc định
-  String _defaultPrintType = 'a4'; // 'a4' hoặc 'thermal'
+  String _defaultPrintType = 'a4'; // 'a4', 'thermal', hoặc 'bluetooth'
   int _defaultLabelsPerRow = 1; // 1, 2, hoặc 3
   int _defaultLabelHeight = 30; // 20, 25, 30, 40mm
   bool _hasDefaultSettings = false; // Đã có cài đặt mặc định chưa
@@ -73,7 +79,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
   @override
   void initState() {
     super.initState();
-    _loadPrintSettings();
+    _initializeAsync();
     _fetchInventoryData();
 
     _scrollController.addListener(() {
@@ -90,6 +96,38 @@ class _InventoryScreenState extends State<InventoryScreen> {
     searchController.addListener(_onSearchChanged);
   }
   
+  /// Khởi tạo các cài đặt async (settings và Bluetooth)
+  Future<void> _initializeAsync() async {
+    await _loadPrintSettings();
+    // Khởi tạo BluetoothPrint sớm để tránh lỗi method channel khi bấm in
+    await _initializeBluetoothPrint();
+  }
+
+  /// Khởi tạo BluetoothPrint sớm (trong initState) để tránh lỗi method channel
+  Future<void> _initializeBluetoothPrint() async {
+    try {
+      // Trên iOS, không khởi tạo Bluetooth do package có bug
+      if (Platform.isIOS) {
+        debugPrint('⚠️ [Inventory] iOS detected - Skipping Bluetooth initialization');
+        return;
+      }
+      
+      // Chỉ thử khởi tạo nếu print type là bluetooth
+      if (_defaultPrintType == 'bluetooth') {
+        debugPrint('🔵 [Inventory] Pre-initializing BluetoothPrint...');
+        // Reset trước khi thử lại
+        BluetoothPrintHelper.resetInitialization();
+        // Gọi một method đơn giản để trigger initialization
+        await BluetoothPrintHelper.isConnected();
+        debugPrint('✅ [Inventory] BluetoothPrint pre-initialized successfully');
+      }
+    } catch (e) {
+      debugPrint('⚠️ [Inventory] BluetoothPrint pre-initialization failed (will retry later): $e');
+      // Không throw error ở đây, để user vẫn có thể dùng app
+      // Sẽ retry khi user thực sự bấm in
+    }
+  }
+
   Future<void> _loadPrintSettings() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -193,7 +231,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
       final response = await widget.tenantClient
           .from('products')
-          .select('id, product_id, imei, status, import_date, return_date, fix_price, send_fix_date, transport_fee, transporter, send_transfer_date, import_transfer_date, sale_price, customer_price, transporter_price, sale_date, saleman, note, import_price, import_currency, warehouse_id, customer, cost_price, supplier_id')
+          .select('id, product_id, imei, status, import_date, return_date, fix_price, send_fix_date, transport_fee, transporter, send_transfer_date, import_transfer_date, sale_price, customer_price, transporter_price, sale_date, saleman, note, import_price, import_currency, warehouse_id, customer, customer_id, cost_price, supplier_id, fix_unit, fix_unit_id')
           .range(start, end);
 
       setState(() {
@@ -236,7 +274,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
     try {
       var query = widget.tenantClient
           .from('products')
-          .select('id, product_id, imei, status, import_date, return_date, fix_price, send_fix_date, transport_fee, transporter, send_transfer_date, import_transfer_date, sale_price, customer_price, transporter_price, sale_date, saleman, note, import_price, import_currency, warehouse_id, customer, cost_price, supplier_id');
+          .select('id, product_id, imei, status, import_date, return_date, fix_price, send_fix_date, transport_fee, transporter, send_transfer_date, import_transfer_date, sale_price, customer_price, transporter_price, sale_date, saleman, note, import_price, import_currency, warehouse_id, customer, customer_id, cost_price, supplier_id, fix_unit, fix_unit_id');
 
       final queryText = searchController.text.toLowerCase();
       
@@ -387,16 +425,57 @@ class _InventoryScreenState extends State<InventoryScreen> {
           .eq('id', productId);
 
       setState(() {
+        // Cập nhật trong danh sách inventory gốc
         final index = inventoryData.indexWhere((item) => item['id'] == productId);
         if (index != -1) {
-          inventoryData[index]['note'] = newNote;
-          filteredInventoryData = _filterInventory(inventoryData);
+          final updatedItem = Map<String, dynamic>.from(inventoryData[index]);
+          updatedItem['note'] = newNote;
+          inventoryData[index] = updatedItem;
+        }
+
+        // Cập nhật trong danh sách đã lọc (trường hợp đang tìm kiếm / lọc)
+        final filteredIndex =
+            filteredInventoryData.indexWhere((item) => item['id'] == productId);
+        if (filteredIndex != -1) {
+          final updatedFilteredItem =
+              Map<String, dynamic>.from(filteredInventoryData[filteredIndex]);
+          updatedFilteredItem['note'] = newNote;
+          filteredInventoryData[filteredIndex] = updatedFilteredItem;
+        }
+
+        if (noteControllers.containsKey(productId)) {
+          noteControllers[productId]!.text = newNote;
         }
       });
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Lỗi khi cập nhật ghi chú: $e')),
       );
+    }
+  }
+
+  // Helper function để load font hỗ trợ Unicode
+  // Sử dụng font mặc định của package pdf (hỗ trợ Unicode)
+  // Nếu có font trong assets thì load từ đó, nếu không thì dùng font mặc định
+  Future<pw.Font?> _loadUnicodeFont() async {
+    try {
+      // Thử load font từ assets nếu có
+      final fontData = await rootBundle.load('assets/fonts/Roboto-Regular.ttf');
+      return pw.Font.ttf(fontData);
+    } catch (e) {
+      // Nếu không có font trong assets, trả về null để dùng font mặc định
+      // Package pdf 3.11.1 có hỗ trợ Unicode với font mặc định
+      return null;
+    }
+  }
+
+  Future<pw.Font?> _loadUnicodeFontBold() async {
+    try {
+      final fontData = await rootBundle.load('assets/fonts/Roboto-Bold.ttf');
+      return pw.Font.ttf(fontData);
+    } catch (e) {
+      // Trả về null để dùng font mặc định
+      return null;
     }
   }
 
@@ -445,56 +524,84 @@ class _InventoryScreenState extends State<InventoryScreen> {
       }
     }
 
-    await _executePrint(printType, labelsPerRow, labelHeight);
+    // Nếu chọn in qua Bluetooth, xử lý riêng
+    // Trên iOS, tạm thời disable Bluetooth do package có bug
+    if (printType == 'bluetooth') {
+      if (Platform.isIOS) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Tính năng in qua Bluetooth tạm thời không khả dụng trên iOS. Vui lòng sử dụng in PDF/thermal.'),
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+        return;
+      }
+      await _executeBluetoothPrint();
+    } else {
+      await _executePrint(printType, labelsPerRow, labelHeight);
+    }
+  }
+
+  /// Helper function để lấy dữ liệu sản phẩm đã lọc (dùng chung cho cả PDF và Bluetooth)
+  Future<List<Map<String, dynamic>>> _fetchFilteredProductsForPrint() async {
+    var query = widget.tenantClient
+        .from('products')
+        .select('id, product_id, imei, status');
+
+    final queryText = searchController.text.toLowerCase();
+    
+    // Tìm kiếm theo tên sản phẩm từ cache
+    List<String> matchingProductIds = [];
+    if (queryText.isNotEmpty) {
+      CacheUtil.productNameCache.forEach((id, name) {
+        if (name.toLowerCase().contains(queryText)) {
+          matchingProductIds.add(id);
+        }
+      });
+    }
+
+    if (queryText.isNotEmpty) {
+      if (matchingProductIds.isNotEmpty) {
+        final productIdConditions = matchingProductIds.map((id) => 'product_id.eq.$id').join(',');
+        query = query.or('imei.ilike.%$queryText%,note.ilike.%$queryText%,$productIdConditions');
+      } else {
+        query = query.or('imei.ilike.%$queryText%,note.ilike.%$queryText%');
+      }
+    }
+
+    if (filterOptions.contains(selectedFilter) &&
+        selectedFilter != 'Tất cả' &&
+        selectedFilter != 'Tồn kho mới nhất' &&
+        selectedFilter != 'Tồn kho lâu nhất') {
+      query = query.eq('status', selectedFilter);
+    }
+
+    if (selectedWarehouse != 'Tất cả') {
+      final warehouseId = CacheUtil.warehouseNameCache.entries
+          .firstWhere((entry) => entry.value == selectedWarehouse, orElse: () => MapEntry('', ''))
+          .key;
+      if (warehouseId.isNotEmpty) {
+        query = query.eq('warehouse_id', warehouseId);
+      }
+    }
+
+    final response = await query;
+    List<Map<String, dynamic>> allItems = response.cast<Map<String, dynamic>>();
+    allItems = _filterInventory(allItems);
+    
+    return allItems;
   }
 
   Future<void> _executePrint(String printType, int labelsPerRow, int labelHeight) async {
     try {
-      // Lấy dữ liệu đã lọc
-      var query = widget.tenantClient
-          .from('products')
-          .select('id, product_id, imei, status');
-
-      final queryText = searchController.text.toLowerCase();
+      // Load font hỗ trợ Unicode (nếu có trong assets)
+      final baseFont = await _loadUnicodeFont();
+      final boldFont = await _loadUnicodeFontBold();
       
-      // Tìm kiếm theo tên sản phẩm từ cache
-      List<String> matchingProductIds = [];
-      if (queryText.isNotEmpty) {
-        CacheUtil.productNameCache.forEach((id, name) {
-          if (name.toLowerCase().contains(queryText)) {
-            matchingProductIds.add(id);
-          }
-        });
-      }
-
-      if (queryText.isNotEmpty) {
-        if (matchingProductIds.isNotEmpty) {
-          final productIdConditions = matchingProductIds.map((id) => 'product_id.eq.$id').join(',');
-          query = query.or('imei.ilike.%$queryText%,note.ilike.%$queryText%,$productIdConditions');
-        } else {
-          query = query.or('imei.ilike.%$queryText%,note.ilike.%$queryText%');
-        }
-      }
-
-      if (filterOptions.contains(selectedFilter) &&
-          selectedFilter != 'Tất cả' &&
-          selectedFilter != 'Tồn kho mới nhất' &&
-          selectedFilter != 'Tồn kho lâu nhất') {
-        query = query.eq('status', selectedFilter);
-      }
-
-      if (selectedWarehouse != 'Tất cả') {
-        final warehouseId = CacheUtil.warehouseNameCache.entries
-            .firstWhere((entry) => entry.value == selectedWarehouse, orElse: () => MapEntry('', ''))
-            .key;
-        if (warehouseId.isNotEmpty) {
-          query = query.eq('warehouse_id', warehouseId);
-        }
-      }
-
-      final response = await query;
-      List<Map<String, dynamic>> allItems = response.cast<Map<String, dynamic>>();
-      allItems = _filterInventory(allItems);
+      // Lấy dữ liệu đã lọc (dùng hàm chung)
+      final allItems = await _fetchFilteredProductsForPrint();
 
       if (allItems.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -521,7 +628,13 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   labelHeight * PdfPageFormat.mm,  // Height: tùy chọn
                   marginAll: 1 * PdfPageFormat.mm,
                 ),
-                build: (context) => _buildThermalLabel(item, barcodeGen, labelHeight),
+                theme: baseFont != null && boldFont != null
+                    ? pw.ThemeData.withFont(
+                        base: baseFont,
+                        bold: boldFont,
+                      )
+                    : null, // Dùng font mặc định nếu không có font từ assets
+                build: (context) => _buildThermalLabel(item, barcodeGen, labelHeight, baseFont: baseFont, boldFont: boldFont),
               ),
             );
           }
@@ -541,13 +654,19 @@ class _InventoryScreenState extends State<InventoryScreen> {
                   labelHeight * PdfPageFormat.mm,  // Height: tùy chọn
                   marginAll: 1 * PdfPageFormat.mm,
                 ),
+                theme: baseFont != null && boldFont != null
+                    ? pw.ThemeData.withFont(
+                        base: baseFont,
+                        bold: boldFont,
+                      )
+                    : null, // Dùng font mặc định nếu không có font từ assets
                 build: (context) {
                   return pw.Row(
                     mainAxisAlignment: pw.MainAxisAlignment.spaceEvenly,
                     children: rowItems.map((item) {
                       return pw.Container(
                         width: 38 * PdfPageFormat.mm, // 40mm - margin
-                        child: _buildThermalLabel(item, barcodeGen, labelHeight),
+                        child: _buildThermalLabel(item, barcodeGen, labelHeight, baseFont: baseFont, boldFont: boldFont),
                       );
                     }).toList(),
                   );
@@ -566,6 +685,12 @@ class _InventoryScreenState extends State<InventoryScreen> {
             pw.Page(
               pageFormat: PdfPageFormat.a4,
               margin: const pw.EdgeInsets.all(20),
+              theme: baseFont != null && boldFont != null
+                  ? pw.ThemeData.withFont(
+                      base: baseFont,
+                      bold: boldFont,
+                    )
+                  : null, // Dùng font mặc định nếu không có font từ assets
               build: (context) {
                 return pw.Column(
                   children: [
@@ -574,10 +699,10 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       crossAxisAlignment: pw.CrossAxisAlignment.start,
                       children: [
                         if (pageItems.isNotEmpty) 
-                          pw.Expanded(child: _buildA4Label(pageItems[0], barcodeGen)),
+                          pw.Expanded(child: _buildA4Label(pageItems[0], barcodeGen, baseFont: baseFont, boldFont: boldFont)),
                         pw.SizedBox(width: 10),
                         if (pageItems.length > 1) 
-                          pw.Expanded(child: _buildA4Label(pageItems[1], barcodeGen))
+                          pw.Expanded(child: _buildA4Label(pageItems[1], barcodeGen, baseFont: baseFont, boldFont: boldFont))
                         else
                           pw.Expanded(child: pw.Container()),
                       ],
@@ -588,12 +713,12 @@ class _InventoryScreenState extends State<InventoryScreen> {
                       crossAxisAlignment: pw.CrossAxisAlignment.start,
                       children: [
                         if (pageItems.length > 2) 
-                          pw.Expanded(child: _buildA4Label(pageItems[2], barcodeGen))
+                          pw.Expanded(child: _buildA4Label(pageItems[2], barcodeGen, baseFont: baseFont, boldFont: boldFont))
                         else
                           pw.Expanded(child: pw.Container()),
                         pw.SizedBox(width: 10),
                         if (pageItems.length > 3) 
-                          pw.Expanded(child: _buildA4Label(pageItems[3], barcodeGen))
+                          pw.Expanded(child: _buildA4Label(pageItems[3], barcodeGen, baseFont: baseFont, boldFont: boldFont))
                         else
                           pw.Expanded(child: pw.Container()),
                       ],
@@ -624,8 +749,179 @@ class _InventoryScreenState extends State<InventoryScreen> {
     }
   }
 
+  /// In qua Bluetooth
+  Future<void> _executeBluetoothPrint() async {
+    try {
+      debugPrint('🔵 [Bluetooth Print] Step 1: Checking connection...');
+      // Kiểm tra kết nối Bluetooth
+      bool connected = false;
+      try {
+        connected = await BluetoothPrintHelper.isConnected();
+        debugPrint('🔵 [Bluetooth Print] Step 1: Connected = $connected');
+      } catch (e, stackTrace) {
+        debugPrint('❌ [Bluetooth Print] Step 1 ERROR: $e');
+        debugPrint('❌ [Bluetooth Print] Step 1 Stack trace: $stackTrace');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Lỗi khởi tạo Bluetooth: $e\nVui lòng thử lại hoặc sử dụng in PDF/thermal.'),
+              duration: const Duration(seconds: 5),
+            ),
+          );
+        }
+        return;
+      }
+      
+      // Nếu chưa kết nối, hiển thị dialog chọn máy in
+      if (!connected) {
+        debugPrint('🔵 [Bluetooth Print] Step 2: Showing device picker...');
+        final device = await BluetoothPrintHelper.showDevicePicker(context);
+        if (device == null) {
+          debugPrint('🔵 [Bluetooth Print] Step 2: User cancelled device selection');
+          return; // User hủy chọn máy in
+        }
+        
+        debugPrint('🔵 [Bluetooth Print] Step 3: Connecting to device...');
+        // Kết nối với máy in
+        final success = await BluetoothPrintHelper.connect(device);
+        if (!success) {
+          debugPrint('❌ [Bluetooth Print] Step 3: Connection failed');
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Không thể kết nối với máy in Bluetooth')),
+            );
+          }
+          return;
+        }
+        
+        debugPrint('🔵 [Bluetooth Print] Step 3: Connection successful');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Đã kết nối với máy in Bluetooth')),
+          );
+        }
+      }
+
+      // Sử dụng CÙNG hàm query như _executePrint() (đã hoạt động tốt)
+      // Đảm bảo 100% logic query giống hệt nhau
+      List<Map<String, dynamic>> allItems = [];
+      
+      debugPrint('🔵 [Bluetooth Print] Step 4: Fetching products data...');
+      try {
+        allItems = await _fetchFilteredProductsForPrint();
+        debugPrint('🔵 [Bluetooth Print] Step 4: Got ${allItems.length} items');
+      } catch (e, stackTrace) {
+        // Log chi tiết lỗi để debug
+        debugPrint('❌ [Bluetooth Print] Step 4 ERROR: $e');
+        debugPrint('❌ [Bluetooth Print] Stack trace: $stackTrace');
+        
+        // Nếu có lỗi query, hiển thị thông báo và return
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Lỗi khi lấy dữ liệu để in: $e'),
+              duration: const Duration(seconds: 5),
+            ),
+          );
+        }
+        return;
+      }
+
+      debugPrint('🔵 [Bluetooth Print] Step 5: Checking if items is empty...');
+      if (allItems.isEmpty) {
+        debugPrint('🔵 [Bluetooth Print] Step 5: No items to print');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Không có dữ liệu để in')),
+          );
+        }
+        return;
+      }
+
+      debugPrint('🔵 [Bluetooth Print] Step 6: Showing loading dialog...');
+      // Hiển thị loading
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const CircularProgressIndicator(),
+              const SizedBox(height: 16),
+              Text('Đang in ${allItems.length} tem qua Bluetooth...'),
+            ],
+          ),
+        ),
+      );
+
+      debugPrint('🔵 [Bluetooth Print] Step 7: Starting to print items...');
+      // In từng item
+      int successCount = 0;
+      int failCount = 0;
+      
+      for (int i = 0; i < allItems.length; i++) {
+        try {
+          final item = allItems[i];
+          debugPrint('🔵 [Bluetooth Print] Step 7.$i: Processing item $i/${allItems.length}');
+          
+          final productId = item['product_id']?.toString() ?? '';
+          final imei = item['imei']?.toString() ?? '';
+          debugPrint('🔵 [Bluetooth Print] Step 7.$i: productId=$productId, imei=$imei');
+          
+          final productName = CacheUtil.getProductName(productId);
+          debugPrint('🔵 [Bluetooth Print] Step 7.$i: productName=$productName');
+          
+          if (imei.isNotEmpty && productName.isNotEmpty) {
+            debugPrint('🔵 [Bluetooth Print] Step 7.$i: Calling printImeiLabel...');
+            final success = await BluetoothPrintHelper.printImeiLabel(
+              productName: productName,
+              imei: imei,
+              labelHeight: 30, // Mặc định 30mm cho Bluetooth
+            );
+            debugPrint('🔵 [Bluetooth Print] Step 7.$i: Print result = $success');
+            
+            if (success) {
+              successCount++;
+              // Đợi một chút giữa các lần in để tránh quá tải
+              await Future.delayed(const Duration(milliseconds: 500));
+            } else {
+              failCount++;
+            }
+          } else {
+            debugPrint('⚠️ [Bluetooth Print] Step 7.$i: Skipping item (imei or productName empty)');
+          }
+        } catch (e, stackTrace) {
+          debugPrint('❌ [Bluetooth Print] Step 7.$i ERROR: $e');
+          debugPrint('❌ [Bluetooth Print] Step 7.$i Stack trace: $stackTrace');
+          failCount++;
+        }
+      }
+
+      debugPrint('🔵 [Bluetooth Print] Step 8: Closing loading dialog and showing result...');
+      if (mounted) {
+        Navigator.pop(context); // Đóng loading dialog
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Đã in $successCount tem. ${failCount > 0 ? 'Lỗi: $failCount tem' : ''}'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e, stackTrace) {
+      debugPrint('❌ [Bluetooth Print] OUTER CATCH ERROR: $e');
+      debugPrint('❌ [Bluetooth Print] OUTER CATCH Stack trace: $stackTrace');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Lỗi khi in qua Bluetooth: $e')),
+        );
+      }
+    }
+  }
+
   // Tem cho máy in nhiệt (tự động điều chỉnh theo chiều cao)
-  pw.Widget _buildThermalLabel(Map<String, dynamic> item, Barcode barcodeGen, int labelHeight) {
+  pw.Widget _buildThermalLabel(Map<String, dynamic> item, Barcode barcodeGen, int labelHeight, {pw.Font? baseFont, pw.Font? boldFont}) {
     final productId = item['product_id']?.toString() ?? '';
     final imei = item['imei']?.toString() ?? '';
     final productName = CacheUtil.getProductName(productId);
@@ -681,6 +977,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
               style: pw.TextStyle(
                 fontSize: titleFontSize,
                 fontWeight: pw.FontWeight.bold,
+                font: boldFont,
               ),
               textAlign: pw.TextAlign.center,
               maxLines: maxLines,
@@ -705,6 +1002,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
             imei,
             style: pw.TextStyle(
               fontSize: enlargedImeiFontSize,
+              font: baseFont,
             ),
             textAlign: pw.TextAlign.center,
           ),
@@ -714,7 +1012,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
   }
 
   // Tem cho giấy A4 (có nhiều không gian hơn)
-  pw.Widget _buildA4Label(Map<String, dynamic> item, Barcode barcodeGen) {
+  pw.Widget _buildA4Label(Map<String, dynamic> item, Barcode barcodeGen, {pw.Font? baseFont, pw.Font? boldFont}) {
     final productId = item['product_id']?.toString() ?? '';
     final imei = item['imei']?.toString() ?? '';
     final productName = CacheUtil.getProductName(productId);
@@ -734,6 +1032,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
             style: pw.TextStyle(
               fontSize: 12,
               fontWeight: pw.FontWeight.bold,
+              font: boldFont,
             ),
             textAlign: pw.TextAlign.center,
             maxLines: 2,
@@ -753,8 +1052,9 @@ class _InventoryScreenState extends State<InventoryScreen> {
           // Số IMEI
           pw.Text(
             imei,
-            style: const pw.TextStyle(
+            style: pw.TextStyle(
               fontSize: 18, // tăng gấp đôi kích thước chữ IMEI
+              font: baseFont,
             ),
             textAlign: pw.TextAlign.center,
           ),
@@ -809,7 +1109,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
 
       var query = widget.tenantClient
           .from('products')
-          .select('id, product_id, imei, status, import_date, return_date, fix_price, send_fix_date, transport_fee, transporter, send_transfer_date, import_transfer_date, sale_price, customer_price, transporter_price, sale_date, saleman, note, import_price, import_currency, warehouse_id, customer, cost_price, supplier_id');
+          .select('id, product_id, imei, status, import_date, return_date, fix_price, send_fix_date, transport_fee, transporter, send_transfer_date, import_transfer_date, sale_price, customer_price, transporter_price, sale_date, saleman, note, import_price, import_currency, warehouse_id, customer, customer_id, cost_price, supplier_id, fix_unit, fix_unit_id');
 
       final queryText = searchController.text.toLowerCase();
       
@@ -973,7 +1273,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
           cell.cellStyle = isMultiline ? styles.multiline : styles.centered;
           sizingTracker.update(currentRowIndex, col, value);
         }
-
+        
         currentRowIndex++;
       }
 
@@ -1039,73 +1339,421 @@ class _InventoryScreenState extends State<InventoryScreen> {
     return NumberFormat('#,###', 'vi_VN').format(value).replaceAll(',', '.');
   }
 
+  // ✅ Helper function để format ngày tháng theo format: 12:30:40 / 20-12-2025
+  String _formatDateTime(String? dateTimeString) {
+    if (dateTimeString == null || dateTimeString.isEmpty) return '';
+    try {
+      final dateTime = DateTime.parse(dateTimeString);
+      final hour = dateTime.hour.toString().padLeft(2, '0');
+      final minute = dateTime.minute.toString().padLeft(2, '0');
+      final second = dateTime.second.toString().padLeft(2, '0');
+      final day = dateTime.day.toString().padLeft(2, '0');
+      final month = dateTime.month.toString().padLeft(2, '0');
+      final year = dateTime.year.toString();
+      return '$hour:$minute:$second / $day-$month-$year';
+    } catch (e) {
+      // Nếu không parse được, trả về chuỗi gốc
+      return dateTimeString;
+    }
+  }
+
+  // ✅ Helper function mở chi tiết khách hàng - ưu tiên dùng customer_id, fallback theo tên
+  Future<void> _openCustomerDetails(
+    String? customerName,
+    BuildContext dialogContext, {
+    String? customerId,
+  }) async {
+    if ((customerName == null || customerName.isEmpty) && (customerId == null || customerId.isEmpty)) {
+      return;
+    }
+    
+    try {
+      dynamic query = widget.tenantClient
+          .from('customers')
+          .select('id, name, phone, address, social_link, debt_vnd, debt_cny, debt_usd');
+
+      if (customerId != null && customerId.isNotEmpty) {
+        query = query.eq('id', customerId);
+      } else {
+        query = query.eq('name', customerName);
+      }
+
+      final response = await query.maybeSingle();
+      
+      if (response != null && mounted) {
+        // Đóng dialog chi tiết sản phẩm trước
+        Navigator.of(dialogContext, rootNavigator: true).pop();
+        
+        // Đợi một chút để dialog đóng hoàn toàn
+        await Future.delayed(const Duration(milliseconds: 100));
+        
+        if (!mounted) return;
+        
+        // Mở màn hình khách hàng
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (newContext) {
+              // Mở dialog chi tiết ngay sau khi màn hình được build
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (newContext.mounted) {
+                  showDialog(
+                    context: newContext,
+                    builder: (context) => CustomerDetailsDialog(
+                      customer: response,
+                      tenantClient: widget.tenantClient,
+                    ),
+                  );
+                }
+              });
+              
+              return CustomersScreen(
+                permissions: widget.permissions,
+                tenantClient: widget.tenantClient,
+              );
+            },
+          ),
+        );
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Không tìm thấy thông tin khách hàng')),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Không thể mở chi tiết khách hàng: $e')),
+        );
+      }
+    }
+  }
+
+  // ✅ Helper function để mở chi tiết nhà cung cấp - ưu tiên supplier_id, có thể fallback theo tên nếu cần
+  Future<void> _openSupplierDetails(
+    String? supplierId,
+    BuildContext dialogContext, {
+    String? supplierName,
+  }) async {
+    if ((supplierId == null || supplierId.isEmpty) &&
+        (supplierName == null || supplierName.isEmpty)) {
+      return;
+    }
+    
+    try {
+      dynamic query = widget.tenantClient
+          .from('suppliers')
+          .select('id, name, phone, address, social_link, debt_vnd, debt_cny, debt_usd');
+
+      if (supplierId != null && supplierId.isNotEmpty) {
+        query = query.eq('id', supplierId);
+      } else {
+        query = query.eq('name', supplierName);
+      }
+
+      final response = await query.maybeSingle();
+      
+      if (response != null && mounted) {
+        // Đóng dialog chi tiết sản phẩm trước
+        Navigator.of(dialogContext, rootNavigator: true).pop();
+        
+        // Đợi một chút để dialog đóng hoàn toàn
+        await Future.delayed(const Duration(milliseconds: 100));
+        
+        if (!mounted) return;
+        
+        // Mở màn hình nhà cung cấp
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (newContext) {
+              // Mở dialog chi tiết ngay sau khi màn hình được build
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (newContext.mounted) {
+                  showDialog(
+                    context: newContext,
+                    builder: (context) => SupplierDetailsDialog(
+                      supplier: response,
+                      tenantClient: widget.tenantClient,
+                    ),
+                  );
+                }
+              });
+              
+              return SuppliersScreen(
+                permissions: widget.permissions,
+                tenantClient: widget.tenantClient,
+              );
+            },
+          ),
+        );
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Không tìm thấy thông tin nhà cung cấp')),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Không thể mở chi tiết nhà cung cấp: $e')),
+        );
+      }
+    }
+  }
+
+  // ✅ Helper function để lấy transporter ID từ tên và mở chi tiết
+  Future<void> _openTransporterDetails(String? transporterName, BuildContext dialogContext) async {
+    if (transporterName == null || transporterName.isEmpty) return;
+    
+    try {
+      final response = await widget.tenantClient
+          .from('transporters')
+          .select('id, name, phone, address, debt')
+          .eq('name', transporterName)
+          .maybeSingle();
+      
+      if (response != null && mounted) {
+        // Đóng dialog chi tiết sản phẩm trước
+        Navigator.of(dialogContext, rootNavigator: true).pop();
+        
+        // Đợi một chút để dialog đóng hoàn toàn
+        await Future.delayed(const Duration(milliseconds: 100));
+        
+        if (!mounted) return;
+        
+        // Mở màn hình đơn vị vận chuyển
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (newContext) {
+              // Mở dialog chi tiết ngay sau khi màn hình được build
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (newContext.mounted) {
+                  showDialog(
+                    context: newContext,
+                    builder: (context) => TransporterDetailsDialog(
+                      transporter: response,
+                      tenantClient: widget.tenantClient,
+                    ),
+                  );
+                }
+              });
+              
+              return TransportersScreen(
+                permissions: widget.permissions,
+                tenantClient: widget.tenantClient,
+              );
+            },
+          ),
+        );
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Không tìm thấy thông tin đơn vị vận chuyển')),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Không thể mở chi tiết đơn vị vận chuyển: $e')),
+        );
+      }
+    }
+  }
+
+  // ✅ Helper function để mở chi tiết đơn vị fix lỗi - ưu tiên fix_unit_id, fallback theo tên
+  Future<void> _openFixerDetails(
+    String? fixerName,
+    BuildContext dialogContext, {
+    String? fixerId,
+  }) async {
+    if ((fixerName == null || fixerName.isEmpty) && (fixerId == null || fixerId.isEmpty)) {
+      return;
+    }
+    
+    try {
+      dynamic query = widget.tenantClient
+          .from('fix_units')
+          .select('id, name, phone, address, social_link, debt_vnd, debt_cny, debt_usd');
+
+      if (fixerId != null && fixerId.isNotEmpty) {
+        query = query.eq('id', fixerId);
+      } else {
+        query = query.eq('name', fixerName);
+      }
+
+      final response = await query.maybeSingle();
+      
+      if (response != null && mounted) {
+        // Đóng dialog chi tiết sản phẩm trước
+        Navigator.of(dialogContext, rootNavigator: true).pop();
+        
+        // Đợi một chút để dialog đóng hoàn toàn
+        await Future.delayed(const Duration(milliseconds: 100));
+        
+        if (!mounted) return;
+        
+        // Mở màn hình đơn vị fix lỗi
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (newContext) {
+              // Mở dialog chi tiết ngay sau khi màn hình được build
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (newContext.mounted) {
+                  showDialog(
+                    context: newContext,
+                    builder: (context) => FixerDetailsDialog(
+                      fixer: response,
+                      tenantClient: widget.tenantClient,
+                    ),
+                  );
+                }
+              });
+              
+              return FixersScreen(
+                permissions: widget.permissions,
+                tenantClient: widget.tenantClient,
+              );
+            },
+          ),
+        );
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Không tìm thấy thông tin đơn vị fix lỗi')),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Không thể mở chi tiết đơn vị fix lỗi: $e')),
+        );
+      }
+    }
+  }
+
   void _showProductDetails(Map<String, dynamic> product) async {
     final productId = product['id'] as int;
-    final productNameId = product['product_id']?.toString();
 
-    String? customer = product['customer']?.toString();
-    String? supplier;
+    // ✅ Ưu tiên lấy tên đối tác theo ID nếu có (không thay đổi dữ liệu trong DB, chỉ enrich để hiển thị)
+    final enrichedProduct = Map<String, dynamic>.from(product);
+    try {
+      // Khách hàng: nếu có customer_id nhưng chưa có tên, tra theo ID
+      if (widget.permissions.contains('view_customer')) {
+        final customerIdFromProduct = enrichedProduct['customer_id']?.toString();
+        final customerNameFromProduct = enrichedProduct['customer']?.toString();
+        if ((customerNameFromProduct == null || customerNameFromProduct.isEmpty) &&
+            customerIdFromProduct != null &&
+            customerIdFromProduct.isNotEmpty) {
+          final customerResponse = await widget.tenantClient
+              .from('customers')
+              .select('name')
+              .eq('id', customerIdFromProduct)
+              .maybeSingle();
+          if (customerResponse != null && customerResponse['name'] != null) {
+            enrichedProduct['customer'] = customerResponse['name'] as String;
+          }
+        }
+      }
 
-    if (widget.permissions.contains('view_supplier')) {
-      final supplierId = product['supplier_id']?.toString();
-      supplier = supplierId != null ? CacheUtil.getSupplierName(supplierId) : null;
+      // Đơn vị fix lỗi: nếu có fix_unit_id nhưng thiếu tên, lấy từ cache (GlobalCacheManager)
+      final fixerIdFromProduct = enrichedProduct['fix_unit_id']?.toString();
+      final fixerNameFromProduct = enrichedProduct['fix_unit']?.toString();
+      if ((fixerNameFromProduct == null || fixerNameFromProduct.isEmpty) &&
+          fixerIdFromProduct != null &&
+          fixerIdFromProduct.isNotEmpty) {
+        enrichedProduct['fix_unit'] = CacheUtil.getFixerName(fixerIdFromProduct);
+      }
+    } catch (_) {
+      // Nếu lỗi khi enrich, bỏ qua, không ảnh hưởng tới luồng nghiệp vụ
     }
-
-    final details = <String, String?>{
-      'Tên sản phẩm': CacheUtil.getProductName(productNameId),
-      'IMEI': product['imei']?.toString(),
-      'Trạng thái': product['status']?.toString(),
-      'Kho': CacheUtil.getWarehouseName(product['warehouse_id']?.toString()),
-      if (widget.permissions.contains('view_import_price'))
-        'Giá nhập': product['import_price'] != null 
-            ? '${_formatCurrency(product['import_price'] as num?)} ${product['import_currency'] ?? ''}' 
-            : null,
-      if (widget.permissions.contains('view_cost_price'))
-        'Giá vốn': product['cost_price'] != null 
-            ? _formatCurrency(product['cost_price'] as num?) 
-            : null,
-      'Ngày nhập': product['import_date']?.toString(),
-      if (widget.permissions.contains('view_supplier') && supplier != null)
-        'Nhà cung cấp': supplier,
-      'Ngày trả hàng': product['return_date']?.toString(),
-      'Tiền fix lỗi': product['fix_price'] != null 
-          ? _formatCurrency(product['fix_price'] as num?) 
-          : null,
-      'Ngày gửi fix lỗi': product['send_fix_date']?.toString(),
-      'Cước vận chuyển': product['transport_fee'] != null 
-          ? _formatCurrency(product['transport_fee'] as num?) 
-          : null,
-      'Đơn vị vận chuyển': product['transporter']?.toString(),
-      'Ngày chuyển kho': product['send_transfer_date']?.toString(),
-      'Ngày nhập kho': product['import_transfer_date']?.toString(),
-      if (widget.permissions.contains('view_sale_price'))
-        'Giá bán': product['sale_price'] != null 
-            ? _formatCurrency(product['sale_price'] as num?) 
-            : null,
-      if (widget.permissions.contains('view_customer') && customer != null)
-        'Khách hàng': customer,
-      'Tiền cọc': product['customer_price'] != null && (product['customer_price'] as num) > 0
-          ? _formatCurrency(product['customer_price'] as num?)
-          : null,
-      'Tiền COD': product['transporter_price'] != null && (product['transporter_price'] as num) > 0
-          ? _formatCurrency(product['transporter_price'] as num?)
-          : null,
-      'Ngày bán': product['sale_date']?.toString(),
-      'Nhân viên bán': product['saleman']?.toString(),
-      'Ghi chú': product['note']?.toString(),
-    };
 
     if (!isEditingNote.containsKey(productId)) {
       isEditingNote[productId] = false;
     }
     if (!noteControllers.containsKey(productId)) {
-      noteControllers[productId] = TextEditingController(text: product['note']?.toString() ?? '');
+      noteControllers[productId] = TextEditingController(text: enrichedProduct['note']?.toString() ?? '');
     }
 
     showDialog(
       context: context,
       builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
+        builder: (context, setDialogState) {
+          final updatedProductIndex = inventoryData.indexWhere((item) => item['id'] == productId);
+          final currentProduct = updatedProductIndex != -1 
+              ? inventoryData[updatedProductIndex] 
+              : enrichedProduct;
+          
+          final productNameId = currentProduct['product_id']?.toString();
+          String? customer = currentProduct['customer']?.toString();
+          // ID đối tác lưu trong products
+          final String? customerId = currentProduct['customer_id']?.toString();
+    String? supplier;
+          String? supplierId;
+          // Luôn lấy dữ liệu từ database, nhưng chỉ hiển thị khi có quyền
+          String? transporter = currentProduct['transporter']?.toString();
+          String? fixer = currentProduct['fix_unit']?.toString();
+          final String? fixerId = currentProduct['fix_unit_id']?.toString();
+
+    if (widget.permissions.contains('view_supplier')) {
+            supplierId = currentProduct['supplier_id']?.toString();
+      supplier = supplierId != null ? CacheUtil.getSupplierName(supplierId) : null;
+    }
+
+    final details = <String, String?>{
+      'Tên sản phẩm': CacheUtil.getProductName(productNameId),
+            'IMEI': currentProduct['imei']?.toString(),
+            'Trạng thái': currentProduct['status']?.toString(),
+            'Kho': CacheUtil.getWarehouseName(currentProduct['warehouse_id']?.toString()),
+      if (widget.permissions.contains('view_import_price'))
+              'Giá nhập': currentProduct['import_price'] != null 
+                  ? '${_formatCurrency(currentProduct['import_price'] as num?)} ${currentProduct['import_currency'] ?? ''}' 
+            : null,
+      if (widget.permissions.contains('view_cost_price'))
+              'Giá vốn': currentProduct['cost_price'] != null 
+                  ? _formatCurrency(currentProduct['cost_price'] as num?) 
+            : null,
+            'Ngày nhập': _formatDateTime(currentProduct['import_date']?.toString()),
+      if (widget.permissions.contains('view_supplier') && supplier != null)
+        'Nhà cung cấp': supplier,
+            'Ngày trả hàng': _formatDateTime(currentProduct['return_date']?.toString()),
+            'Tiền fix lỗi': currentProduct['fix_price'] != null 
+                ? _formatCurrency(currentProduct['fix_price'] as num?) 
+          : null,
+            'Ngày gửi fix lỗi': _formatDateTime(currentProduct['send_fix_date']?.toString()),
+            if (widget.permissions.contains('view_fixer') && fixer != null && fixer.trim().isNotEmpty)
+              'Đơn vị fix lỗi': fixer.trim(),
+            'Cước vận chuyển': currentProduct['transport_fee'] != null 
+                ? _formatCurrency(currentProduct['transport_fee'] as num?) 
+          : null,
+            if (widget.permissions.contains('view_transporter') && transporter != null && transporter.trim().isNotEmpty)
+              'Đơn vị vận chuyển': transporter.trim(),
+            'Ngày chuyển kho': _formatDateTime(currentProduct['send_transfer_date']?.toString()),
+            'Ngày nhập kho': _formatDateTime(currentProduct['import_transfer_date']?.toString()),
+      if (widget.permissions.contains('view_sale_price'))
+              'Giá bán': currentProduct['sale_price'] != null 
+                  ? _formatCurrency(currentProduct['sale_price'] as num?) 
+            : null,
+      if (widget.permissions.contains('view_customer') && customer != null)
+        'Khách hàng': customer,
+            'Tiền cọc': currentProduct['customer_price'] != null && (currentProduct['customer_price'] as num) > 0
+                ? _formatCurrency(currentProduct['customer_price'] as num?)
+          : null,
+            'Tiền COD': currentProduct['transporter_price'] != null && (currentProduct['transporter_price'] as num) > 0
+                ? _formatCurrency(currentProduct['transporter_price'] as num?)
+          : null,
+            'Ngày bán': _formatDateTime(currentProduct['sale_date']?.toString()),
+            'Nhân viên bán': currentProduct['saleman']?.toString(),
+            'Ghi chú': currentProduct['note']?.toString(),
+          };
+
+          return AlertDialog(
           title: const Text('Chi tiết sản phẩm'),
           content: SingleChildScrollView(
             child: Column(
@@ -1114,10 +1762,108 @@ class _InventoryScreenState extends State<InventoryScreen> {
               children: [
                 ...details.entries
                     .where((entry) => entry.value != null && entry.value!.isNotEmpty)
-                    .map((entry) => Padding(
+                      .map((entry) {
+                        final isPartner = entry.key == 'Khách hàng' || 
+                                         entry.key == 'Nhà cung cấp' || 
+                                         entry.key == 'Đơn vị vận chuyển' ||
+                                         entry.key == 'Đơn vị fix lỗi';
+                        return Padding(
                           padding: const EdgeInsets.symmetric(vertical: 4.0),
-                          child: Text('${entry.key}: ${entry.value}'),
-                        )),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '${entry.key}: ',
+                                style: const TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                              Expanded(
+                                child: isPartner
+                                    ? InkWell(
+                                        onTap: () {
+                                          // Hiển thị menu với 2 tùy chọn cho đối tác
+                                          showModalBottomSheet(
+                                            context: context,
+                                            builder: (context) => SafeArea(
+                                              child: Column(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  ListTile(
+                                                    leading: const Icon(Icons.copy),
+                                                    title: const Text('Sao chép'),
+                                                    onTap: () {
+                                                      Clipboard.setData(ClipboardData(text: entry.value!));
+                                                      Navigator.pop(context);
+                                                      ScaffoldMessenger.of(context).showSnackBar(
+                                                        const SnackBar(
+                                                          content: Text('Đã sao chép vào clipboard'),
+                                                          duration: Duration(seconds: 1),
+                                                        ),
+                                                      );
+                                                    },
+                                                  ),
+                                                  ListTile(
+                                                    leading: const Icon(Icons.visibility),
+                                                    title: const Text('Xem đối tác'),
+                                                    onTap: () {
+                                                      Navigator.pop(context);
+                                                      if (entry.key == 'Khách hàng') {
+                                                        _openCustomerDetails(
+                                                          entry.value,
+                                                          context,
+                                                          customerId: customerId,
+                                                        );
+                                                      } else if (entry.key == 'Nhà cung cấp') {
+                                                        _openSupplierDetails(
+                                                          supplierId,
+                                                          context,
+                                                          supplierName: supplier,
+                                                        );
+                                                      } else if (entry.key == 'Đơn vị vận chuyển') {
+                                                        _openTransporterDetails(entry.value, context);
+                                                      } else if (entry.key == 'Đơn vị fix lỗi') {
+                                                        _openFixerDetails(
+                                                          entry.value,
+                                                          context,
+                                                          fixerId: fixerId,
+                                                        );
+                                                      }
+                                                    },
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                        child: Text(
+                                          entry.value!,
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.normal,
+                                            color: Colors.blue,
+                                            decoration: TextDecoration.underline,
+                                          ),
+                                        ),
+                                      )
+                                    : GestureDetector(
+                                        onLongPress: () {
+                                          // Chỉ copy cho các trường khác
+                                          Clipboard.setData(ClipboardData(text: entry.value!));
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            const SnackBar(
+                                              content: Text('Đã sao chép vào clipboard'),
+                                              duration: Duration(seconds: 1),
+                                            ),
+                                          );
+                                        },
+                                        child: SelectableText(
+                                          entry.value!,
+                                          style: const TextStyle(fontWeight: FontWeight.normal),
+                                        ),
+                                      ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
                 const SizedBox(height: 8),
                 if (isEditingNote[productId] ?? false)
                   TextField(
@@ -1136,9 +1882,12 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 if (isEditingNote[productId] ?? false) {
                   final newNote = noteControllers[productId]!.text;
                   await _updateNote(productId, newNote);
+                    if (mounted) {
+                      await Future.delayed(const Duration(milliseconds: 100));
                   setDialogState(() {
                     isEditingNote[productId] = false;
                   });
+                    }
                 } else {
                   setDialogState(() {
                     isEditingNote[productId] = true;
@@ -1146,7 +1895,7 @@ class _InventoryScreenState extends State<InventoryScreen> {
                 }
               },
               child: Text(
-                (isEditingNote[productId] ?? false) ? 'Xong' : 'Sửa',
+                (isEditingNote[productId] ?? false) ? 'Xong' : 'Ghi chú',
                 style: const TextStyle(color: Colors.blue),
               ),
             ),
@@ -1156,7 +1905,8 @@ class _InventoryScreenState extends State<InventoryScreen> {
               child: const Text('Đóng'),
             ),
           ],
-        ),
+          );
+        },
       ),
     );
   }
@@ -1322,11 +2072,34 @@ class _InventoryScreenState extends State<InventoryScreen> {
                         subtitle: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
+                            GestureDetector(
+                              onLongPress: () {
+                                final imei = item['imei']?.toString() ?? '';
+                                if (imei.isNotEmpty) {
+                                  Clipboard.setData(ClipboardData(text: imei));
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('Đã sao chép IMEI vào clipboard'),
+                                      duration: Duration(seconds: 1),
+                                    ),
+                                  );
+                                }
+                              },
+                              child: Text(
                               'IMEI: ${item['imei']?.toString() ?? ''}',
                               style: const TextStyle(fontSize: 14),
                               overflow: TextOverflow.ellipsis,
                             ),
+                            ),
+                            if (item['note'] != null && item['note'].toString().isNotEmpty) ...[
+                              const SizedBox(height: 2),
+                              Text(
+                                'Ghi chú: ${item['note']}',
+                                style: const TextStyle(fontSize: 12, color: Colors.blue),
+                                overflow: TextOverflow.ellipsis,
+                                maxLines: 1,
+                              ),
+                            ],
                             if (showDaysInInventory) ...[
                               const SizedBox(height: 2),
                               Text(
@@ -1464,6 +2237,31 @@ class _PrintSettingsDialogState extends State<_PrintSettingsDialog> {
             });
           },
         ),
+        // Tạm thời ẩn Bluetooth trên iOS do package có bug
+        if (!Platform.isIOS)
+          RadioListTile<String>(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            title: const Text('In qua Bluetooth'),
+            subtitle: const Text('Kết nối trực tiếp với máy in Bluetooth (CLabel CT221B)', style: TextStyle(fontSize: 12)),
+            value: 'bluetooth',
+            groupValue: _selectedPrintType,
+            onChanged: (value) {
+              setState(() {
+                _selectedPrintType = value!;
+              });
+            },
+          ),
+        if (Platform.isIOS)
+          RadioListTile<String>(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            title: const Text('In qua Bluetooth (iOS - Tạm thời không khả dụng)'),
+            subtitle: const Text('Tính năng này đang được phát triển cho iOS. Vui lòng sử dụng in PDF/thermal.', style: TextStyle(fontSize: 12, color: Colors.orange)),
+            value: 'bluetooth_disabled',
+            groupValue: 'bluetooth_disabled',
+            onChanged: null, // Disabled
+          ),
         
         // Layout (chỉ hiện khi chọn tem nhiệt)
         if (_selectedPrintType == 'thermal') ...[

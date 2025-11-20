@@ -166,10 +166,11 @@ class _OrdersScreenState extends State<OrdersScreen> with SingleTickerProviderSt
 
       final productResponse = await widget.tenantClient.from('products_name').select('id, products');
       final productList = productResponse
-          .map((e) => {
+          .map((e) => <String, dynamic>{
                 'id': e['id'] as String,
                 'name': e['products'] as String,
               })
+          .cast<Map<String, dynamic>>()
           .toList();
 
       await _loadMoreOrders(customerList, productList);
@@ -628,101 +629,145 @@ class _OrdersScreenState extends State<OrdersScreen> with SingleTickerProviderSt
 
   void addProductDialog() async {
     String name = '';
+    int? selectedCategoryId = categoryId;
+    String? selectedCategoryName = categoryName;
+    
     await showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Thêm sản phẩm'),
-        content: TextField(
-          decoration: const InputDecoration(labelText: 'Tên sản phẩm'),
-          onChanged: (val) => name = val,
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Hủy'),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Thêm sản phẩm'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DropdownButtonFormField<int>(
+                  value: selectedCategoryId,
+                  decoration: const InputDecoration(
+                    labelText: 'Chủng loại sản phẩm *',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: categories.map((e) => DropdownMenuItem<int>(
+                    value: e['id'] as int,
+                    child: Text(e['name'] as String),
+                  )).toList(),
+                  onChanged: (val) {
+                    setDialogState(() {
+                      selectedCategoryId = val;
+                      if (val != null) {
+                        final selectedCategory = categories.firstWhere((e) => e['id'] == val);
+                        selectedCategoryName = selectedCategory['name'] as String;
+                      }
+                    });
+                  },
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  decoration: const InputDecoration(
+                    labelText: 'Tên sản phẩm *',
+                    border: OutlineInputBorder(),
+                  ),
+                  onChanged: (val) => name = val,
+                ),
+              ],
+            ),
           ),
-          ElevatedButton(
-            onPressed: () async {
-              if (name.isEmpty) {
-                await showDialog(
-                  context: context,
-                  builder: (context) => AlertDialog(
-                    title: const Text('Thông báo'),
-                    content: const Text('Tên sản phẩm không được để trống!'),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('Đóng'),
-                      ),
-                    ],
-                  ),
-                );
-                return;
-              }
-              if (categoryId == null) {
-                await showDialog(
-                  context: context,
-                  builder: (context) => AlertDialog(
-                    title: const Text('Thông báo'),
-                    content: const Text('Vui lòng chọn chủng loại sản phẩm trước!'),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('Đóng'),
-                      ),
-                    ],
-                  ),
-                );
-                return;
-              }
-              try {
-                final response = await widget.tenantClient
-                    .from('products_name')
-                    .insert({'products': name})
-                    .select('id, products')
-                    .single();
-                setState(() {
-                  products.add({
-                    'id': response['id'] as String,
-                    'name': name,
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Hủy'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                if (name.isEmpty) {
+                  await showDialog(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: const Text('Thông báo'),
+                      content: const Text('Tên sản phẩm không được để trống!'),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Đóng'),
+                        ),
+                      ],
+                    ),
+                  );
+                  return;
+                }
+                if (selectedCategoryId == null) {
+                  await showDialog(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: const Text('Thông báo'),
+                      content: const Text('Vui lòng chọn chủng loại sản phẩm!'),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Đóng'),
+                        ),
+                      ],
+                    ),
+                  );
+                  return;
+                }
+                try {
+                  final response = await widget.tenantClient
+                      .from('products_name')
+                      .insert({
+                        'products': name,
+                        'category_id': selectedCategoryId,
+                      })
+                      .select('id, products')
+                      .single();
+                  setState(() {
+                    products.add(<String, dynamic>{
+                      'id': response['id'] as String,
+                      'name': name,
+                    });
+                    productId = response['id'] as String;
+                    productName = name;
+                    // Cập nhật categoryId và categoryName nếu chưa có
+                    if (categoryId == null) {
+                      categoryId = selectedCategoryId;
+                      categoryName = selectedCategoryName;
+                    }
                   });
-                  productId = response['id'] as String;
-                  productName = name;
-                });
-                CacheUtil.productNameCache[response['id'] as String] = name;
-                Navigator.pop(context);
-                await showDialog(
-                  context: context,
-                  builder: (context) => AlertDialog(
-                    title: const Text('Thông báo'),
-                    content: const Text('Đã thêm sản phẩm thành công'),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('Đóng'),
-                      ),
-                    ],
-                  ),
-                );
-              } catch (e) {
-                await showDialog(
-                  context: context,
-                  builder: (context) => AlertDialog(
-                    title: const Text('Thông báo'),
-                    content: Text('Lỗi khi thêm sản phẩm: $e'),
-                    actions: [
-                      TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('Đóng'),
-                      ),
-                    ],
-                  ),
-                );
-              }
-            },
-            child: const Text('Lưu'),
-          ),
-        ],
+                  CacheUtil.productNameCache[response['id'] as String] = name;
+                  Navigator.pop(context);
+                  await showDialog(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: const Text('Thông báo'),
+                      content: const Text('Đã thêm sản phẩm thành công'),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Đóng'),
+                        ),
+                      ],
+                    ),
+                  );
+                } catch (e) {
+                  await showDialog(
+                    context: context,
+                    builder: (context) => AlertDialog(
+                      title: const Text('Thông báo'),
+                      content: Text('Lỗi khi thêm sản phẩm: $e'),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Đóng'),
+                        ),
+                      ],
+                    ),
+                  );
+                }
+              },
+              child: const Text('Lưu'),
+            ),
+          ],
+        ),
       ),
     );
   }

@@ -719,6 +719,20 @@ class _SaleSummaryState extends State<SaleSummary> {
         final doanhsoPerProduct = (item['doanhso'] as num?)?.toDouble() ?? 0;
         final totalDoanhsoForItem = doanhsoPerProduct * imeiCount;
         
+        // Tính tiền cọc và tiền COD cho item này (chia đều cho tổng số sản phẩm)
+        double? itemCustomerPrice;
+        double? itemTransporterPrice;
+        if (account == 'Ship COD') {
+          // Tiền cọc mỗi sản phẩm = tổng tiền cọc / tổng số sản phẩm
+          // Tiền COD mỗi sản phẩm = giá sản phẩm - tiền cọc mỗi sản phẩm
+          // Trong sale_orders, mỗi loại sản phẩm lưu 1 hàng với quantity, nên phải nhân với số lượng
+          final itemPrice = item['price'] as double;
+          final customerPricePerProduct = customerPricePerImei; // Tiền cọc mỗi sản phẩm
+          final transporterPricePerProduct = itemPrice - customerPricePerImei; // Tiền COD mỗi sản phẩm
+          itemCustomerPrice = customerPricePerProduct * imeiCount; // Tổng tiền cọc cho số lượng sản phẩm trong item
+          itemTransporterPrice = transporterPricePerProduct * imeiCount; // Tổng tiền COD cho số lượng sản phẩm trong item
+        }
+        
         saleOrdersList.add({
           'customer_id': widget.customerId,
           'customer': widget.customerName,
@@ -735,8 +749,8 @@ class _SaleSummaryState extends State<SaleSummary> {
           'profit': totalProfit,
           'created_at': now.toIso8601String(),
           'iscancelled': false,
-          'customer_price': account == 'Ship COD' ? depositValue : null,
-          'transporter_price': account == 'Ship COD' ? codAmount : null,
+          'customer_price': itemCustomerPrice, // Tổng tiền cọc cho số lượng sản phẩm trong item
+          'transporter_price': itemTransporterPrice, // Tổng tiền COD cho số lượng sản phẩm trong item
           'transporter': account == 'Ship COD' ? transporter : null,
           'doanhso': totalDoanhsoForItem, // Lưu tổng doanh số (đã nhân với số lượng)
         });
@@ -767,6 +781,7 @@ class _SaleSummaryState extends State<SaleSummary> {
             'sale_price': salePriceInVND,
             'profit': salePriceInVND - costPrice,
             'customer': widget.customerName,
+            'customer_id': int.parse(widget.customerId), // ✅ Lưu customer_id vào products
             'customer_price': account == 'Ship COD' ? customerPricePerImei : null,
             'transporter_price': account == 'Ship COD' ? (transporterPricePerImei[imei] ?? 0) : null,
             'transporter': account == 'Ship COD' ? transporter : null,
@@ -811,6 +826,15 @@ class _SaleSummaryState extends State<SaleSummary> {
       print('  customer_debt_change: $customerDebtChange');
       print('  transporter_debt_change: $transporterDebtChange');
       print('  account_balance_change: $accountBalanceChange');
+      // ✅ Debug: Kiểm tra customer_id, customer_price, transporter_price trong products_updates
+      if (productsUpdatesList.isNotEmpty) {
+        final firstUpdate = productsUpdatesList.first;
+        print('  First product update IMEI: ${firstUpdate['imei']}');
+        print('  First product update customer_id: ${firstUpdate['customer_id']}');
+        print('  First product update customer_price: ${firstUpdate['customer_price']}');
+        print('  First product update transporter_price: ${firstUpdate['transporter_price']}');
+        print('  Account: $account');
+      }
 
       // ✅ CALL RPC FUNCTION - All operations in ONE atomic transaction
       final result = await retry(

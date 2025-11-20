@@ -817,6 +817,8 @@ class _CustomerDetailsDialogState extends State<CustomerDetailsDialog> {
         'Số lượng',
         'Số tiền',
         'Đơn vị tiền',
+        'Tiền cọc',
+        'Tiền COD',
         'Kho',
         'Tài khoản',
         'Ghi chú',
@@ -831,7 +833,7 @@ class _CustomerDetailsDialogState extends State<CustomerDetailsDialog> {
             columnIndex: columnIndex,
             rowIndex: currentRow - 1,
           ),
-        );
+      );
         final label = headerLabels[columnIndex];
         cell.value = TextCellValue(label);
         cell.cellStyle = styles.header;
@@ -867,21 +869,38 @@ class _CustomerDetailsDialogState extends State<CustomerDetailsDialog> {
         final warehouseName = CacheUtil.getWarehouseName(warehouseId);
         final account = transaction['account']?.toString() ?? '';
         final note = transaction['note']?.toString() ?? '';
-
+        
+        // Lấy customer_price và transporter_price
+        final customerPrice = transaction['customer_price'] as num?;
+        final transporterPrice = transaction['transporter_price'] as num?;
+        
         // Tính số tiền cho mỗi IMEI
         num amountPerImei;
+        num customerPricePerImei = 0;
+        num transporterPricePerImei = 0;
         if (type == 'Phiếu Bán Hàng' || type == 'Phiếu Nhập Lại Hàng') {
           // Với phiếu có price, mỗi IMEI = price (đơn giá)
           amountPerImei = price ?? 0;
+          // Tính tiền cọc và tiền COD per IMEI
+          if (customerPrice != null && qtyNum > 0) {
+            customerPricePerImei = customerPrice / qtyNum;
+          }
+          if (transporterPrice != null && qtyNum > 0) {
+            transporterPricePerImei = transporterPrice / qtyNum;
+          }
         } else {
           // Với financial_orders (không có IMEI hoặc không chia được), dùng totalAmount
           amountPerImei = totalAmount;
         }
         final formattedAmountPerImei = formatNumber(amountPerImei);
         final formattedAmount = formatNumber(totalAmount);
+        final formattedCustomerPrice = customerPrice != null ? formatNumber(customerPrice) : '';
+        final formattedTransporterPrice = transporterPrice != null ? formatNumber(transporterPrice) : '';
+        final formattedCustomerPricePerImei = customerPricePerImei > 0 ? formatNumber(customerPricePerImei) : '';
+        final formattedTransporterPricePerImei = transporterPricePerImei > 0 ? formatNumber(transporterPricePerImei) : '';
 
         if (hasMultipleImeis) {
-          // ✅ Mỗi IMEI là 1 dòng - thứ tự cột mới: Loại giao dịch, Ngày, Tên sản phẩm, IMEI, Số lượng, Số tiền, Đơn vị tiền, Kho, Tài khoản, Ghi chú
+          // ✅ Mỗi IMEI là 1 dòng - thứ tự cột: Loại giao dịch, Ngày, Tên sản phẩm, IMEI, Số lượng, Số tiền, Đơn vị tiền, Tiền cọc, Tiền COD, Kho, Tài khoản, Ghi chú
           for (final singleImei in imeiList) {
             final rowValues = [
               type,
@@ -891,6 +910,8 @@ class _CustomerDetailsDialogState extends State<CustomerDetailsDialog> {
               '1',
               formattedAmountPerImei,
               currency,
+              formattedCustomerPricePerImei,
+              formattedTransporterPricePerImei,
               warehouseName,
               account,
               note,
@@ -920,6 +941,8 @@ class _CustomerDetailsDialogState extends State<CustomerDetailsDialog> {
             quantityStr,
             formattedAmount,
             currency,
+            formattedCustomerPrice,
+            formattedTransporterPrice,
             warehouseName,
             account,
             note,

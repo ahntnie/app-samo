@@ -186,7 +186,7 @@ class _ExcelReportScreenState extends State<ExcelReportScreen> {
     var excel = Excel.createExcel();
     excel.delete('Sheet1');
 
-    final numericColumns = [
+    final integerColumnsForExport = [
       'quantity',
       'min_value',
       'max_value',
@@ -198,6 +198,17 @@ class _ExcelReportScreenState extends State<ExcelReportScreen> {
       'receive_amount',
       'from_amount',
       'to_amount',
+      'customer_price',
+      'transporter_price',
+      'doanhso',
+      'debt',
+      // ✅ ID đối tác dạng int4 trong bảng products
+      'customer_id',
+      'fix_unit_id',
+      'supplier_id',
+    ];
+
+    final numericColumns = [
       'price',
       'total_amount',
       'transport_fee',
@@ -209,10 +220,6 @@ class _ExcelReportScreenState extends State<ExcelReportScreen> {
       'rate_vnd_cny',
       'rate_vnd_usd',
       'cost',
-      'customer_price',
-      'transporter_price',
-    'doanhso',
-      'debt',
     ];
 
     for (var table in tables) {
@@ -265,10 +272,17 @@ class _ExcelReportScreenState extends State<ExcelReportScreen> {
               cellValueString = warehouseId != null ? warehouseIdToName[warehouseId] ?? '' : '';
             } else if (columnName == 'imei') {
               cellValueString = _formatImeiForExcelCell(cellValueRaw);
-            } else if (numericColumns.contains(columnName)) {
+            } else if (integerColumnsForExport.contains(columnName)) {
               if (cellValueRaw != null) {
                 final doubleValue = double.tryParse(cellValueRaw.toString());
                 cellValueString = doubleValue != null ? doubleValue.toInt().toString() : '';
+              } else {
+                cellValueString = '';
+              }
+            } else if (numericColumns.contains(columnName)) {
+              if (cellValueRaw != null) {
+                final doubleValue = double.tryParse(cellValueRaw.toString());
+                cellValueString = doubleValue != null ? doubleValue.toString() : '';
               } else {
                 cellValueString = '';
               }
@@ -396,13 +410,16 @@ class _ExcelReportScreenState extends State<ExcelReportScreen> {
           'Giá nhập': 'import_price',
           'Đơn vị tiền nhập': 'import_currency',
           'Nhà cung cấp': 'supplier',
+          'ID Nhà cung cấp': 'supplier_id',
           'Ngày nhập': 'import_date',
           'Trạng thái': 'status',
           'Đơn vị sửa chữa': 'fix_unit',
+          'ID Đơn vị sửa': 'fix_unit_id',
           'Giá sửa': 'fix_price',
           'Đơn vị tiền sửa': 'fix_currency',
           'Giá bán': 'sale_price',
           'Khách hàng': 'customer',
+          'ID Khách hàng': 'customer_id',
           'Đơn vị ship COD': 'transporter',
           'Phí vận chuyển': 'transport_fee',
           'Giá vốn': 'cost_price',
@@ -555,8 +572,8 @@ class _ExcelReportScreenState extends State<ExcelReportScreen> {
           'Ngày tạo': 'created_at',
           'Đã hủy': 'iscancelled',
           'Đơn vị ship COD': 'transporter',
-          'Tiền khách cọc': 'customer_price',
-          'Tiền COD vận': 'transporter_price',
+          'Tiền cọc': 'customer_price',
+          'Tiền COD': 'transporter_price',
           'Kho hàng': 'warehouse_name',
           'ID Kho': 'warehouse_id',
         },
@@ -825,13 +842,16 @@ class _ExcelReportScreenState extends State<ExcelReportScreen> {
           'Giá nhập': 'import_price',
           'Đơn vị tiền nhập': 'import_currency',
           'Nhà cung cấp': 'supplier',
+          'ID Nhà cung cấp': 'supplier_id',
           'Ngày nhập': 'import_date',
           'Trạng thái': 'status',
           'Đơn vị sửa chữa': 'fix_unit',
+          'ID Đơn vị sửa': 'fix_unit_id',
           'Giá sửa': 'fix_price',
           'Đơn vị tiền sửa': 'fix_currency',
           'Giá bán': 'sale_price',
           'Khách hàng': 'customer',
+          'ID Khách hàng': 'customer_id',
           'Đơn vị ship COD': 'transporter',
           'Phí vận chuyển': 'transport_fee',
           'Giá vốn': 'cost_price',
@@ -984,8 +1004,8 @@ class _ExcelReportScreenState extends State<ExcelReportScreen> {
           'Ngày tạo': 'created_at',
           'Đã hủy': 'iscancelled',
           'Đơn vị ship COD': 'transporter',
-          'Tiền khách cọc': 'customer_price',
-          'Tiền COD vận': 'transporter_price',
+          'Tiền cọc': 'customer_price',
+          'Tiền COD': 'transporter_price',
           'Kho hàng': 'warehouse_name',
           'ID Kho': 'warehouse_id',
         },
@@ -1104,6 +1124,10 @@ class _ExcelReportScreenState extends State<ExcelReportScreen> {
         'cost',
         'transport_fee',
         'doanhso',
+        // ✅ ID đối tác dạng int4 trong bảng products
+        'customer_id',
+        'fix_unit_id',
+        'supplier_id',
       ];
 
       final numericColumns = [
@@ -1121,10 +1145,7 @@ class _ExcelReportScreenState extends State<ExcelReportScreen> {
       final uuidColumns = [
         'product_id',
         'warehouse_id',
-        'supplier_id',
         'partner_id',
-        'fix_unit_id',
-        'customer_id',
         'id',
       ];
 

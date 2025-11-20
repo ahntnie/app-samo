@@ -1,3 +1,4 @@
+import 'dart:ui';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -6,6 +7,21 @@ import 'helpers/global_cache_manager.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // Thêm global error handler để bắt lỗi và tránh crash
+  FlutterError.onError = (FlutterErrorDetails details) {
+    FlutterError.presentError(details);
+    // Log lỗi để debug
+    print('❌ [FlutterError] ${details.exception}');
+    print('❌ [FlutterError] Stack: ${details.stack}');
+  };
+  
+  // Bắt lỗi async không được catch
+  PlatformDispatcher.instance.onError = (error, stack) {
+    print('❌ [PlatformDispatcher Error] $error');
+    print('❌ [PlatformDispatcher Error] Stack: $stack');
+    return true; // Trả về true để báo rằng đã xử lý lỗi
+  };
   
   // Initialize Firebase
   await Firebase.initializeApp();

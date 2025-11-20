@@ -58,7 +58,7 @@ class _ReceiveFormState extends State<ReceiveForm> {
     'Đơn vị fix lỗi',
     'Đơn vị vận chuyển',
   ];
-  List<String> partnerNames = [];
+  List<Map<String, dynamic>> partnerData = []; // Lưu cả name, phone, id
   Map<String, String> partnerIdMap = {}; // Map name to id for customers
   List<String> currencies = [];
   List<String> accounts = [];
@@ -96,7 +96,8 @@ class _ReceiveFormState extends State<ReceiveForm> {
       if (mounted) {
         setState(() {
           currencies = uniqueCurrencies;
-          currency = currencies.isNotEmpty ? currencies.first : null;
+          // ✅ Ưu tiên VND nếu có trong danh sách, nếu không thì lấy currency đầu tiên
+          currency = currencies.contains('VND') ? 'VND' : (currencies.isNotEmpty ? currencies.first : null);
           loadAccounts();
         });
       }
@@ -149,23 +150,35 @@ class _ReceiveFormState extends State<ReceiveForm> {
             ? 'fix_units'
             : 'transporters';
     try {
-      final selectColumns = (type == 'Khách hàng' || type == 'Nhà cung cấp' || type == 'Đơn vị fix lỗi') ? 'id, name' : 'name';
+      // ✅ Select cả phone cho customers, suppliers, fix_units
+      final selectColumns = (type == 'Khách hàng' || type == 'Nhà cung cấp' || type == 'Đơn vị fix lỗi') 
+          ? 'id, name, phone' 
+          : 'name';
       final res = await widget.tenantClient.from(table).select(selectColumns);
       if (mounted) {
         setState(() {
-          partnerNames =
-              res
-                  .map((e) => e['name'] as String?)
-                  .where((e) => e != null)
-                  .cast<String>()
-                  .toList();
+          // ✅ Lưu dạng Map với name, phone, id
+          partnerData = res
+              .map((e) => <String, dynamic>{
+                    'id': (type == 'Khách hàng' || type == 'Nhà cung cấp' || type == 'Đơn vị fix lỗi') 
+                        ? e['id']?.toString() 
+                        : null,
+                    'name': e['name'] as String? ?? '',
+                    'phone': (type == 'Khách hàng' || type == 'Nhà cung cấp' || type == 'Đơn vị fix lỗi')
+                        ? (e['phone'] as String? ?? '')
+                        : '',
+                  })
+              .where((e) => e['name'] != null && (e['name'] as String).isNotEmpty)
+              .toList()
+            ..sort((a, b) => (a['name'] as String).compareTo(b['name'] as String));
+          
           // Build id map for customers, suppliers, and fix units
           if (type == 'Khách hàng' || type == 'Nhà cung cấp' || type == 'Đơn vị fix lỗi') {
             partnerIdMap = {};
-            for (var e in res) {
-              final name = e['name'] as String?;
-              final id = e['id']?.toString();
-              if (name != null && id != null) {
+            for (var e in partnerData) {
+              final name = e['name'] as String;
+              final id = e['id'] as String?;
+              if (name.isNotEmpty && id != null) {
                 partnerIdMap[name] = id;
               }
             }
@@ -379,30 +392,43 @@ class _ReceiveFormState extends State<ReceiveForm> {
     final balance = accData?['balance'] as num? ?? 0;
 
     final table = getTable(partnerType!);
-    final partnerData = (partnerType == 'Khách hàng' || partnerType == 'Nhà cung cấp' || partnerType == 'Đơn vị fix lỗi') && partnerId != null
-        ? await widget.tenantClient
-            .from(table)
-            .select('debt_vnd, debt_cny, debt_usd')
-            .eq('id', partnerId!)
-            .single()
-        : await widget.tenantClient
-            .from(table)
-            .select('debt_vnd, debt_cny, debt_usd')
-            .eq('name', partnerName!)
-            .single();
-
     String debtColumn;
-    if (currency == 'VND') {
-      debtColumn = 'debt_vnd';
-    } else if (currency == 'CNY') {
-      debtColumn = 'debt_cny';
-    } else if (currency == 'USD') {
-      debtColumn = 'debt_usd';
+    Map<String, dynamic> partnerData;
+    
+    // ✅ Transporters chỉ có cột 'debt', không có debt_vnd/debt_cny/debt_usd
+    if (partnerType == 'Đơn vị vận chuyển') {
+      partnerData = await widget.tenantClient
+          .from(table)
+          .select('debt')
+          .eq('name', partnerName!)
+          .single();
+      debtColumn = 'debt';
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Loại tiền tệ không được hỗ trợ: $currency')),
-      );
-      return;
+      // ✅ Các loại đối tác khác có debt_vnd, debt_cny, debt_usd
+      partnerData = (partnerType == 'Khách hàng' || partnerType == 'Nhà cung cấp' || partnerType == 'Đơn vị fix lỗi') && partnerId != null
+          ? await widget.tenantClient
+              .from(table)
+              .select('debt_vnd, debt_cny, debt_usd')
+              .eq('id', partnerId!)
+              .single()
+          : await widget.tenantClient
+              .from(table)
+              .select('debt_vnd, debt_cny, debt_usd')
+              .eq('name', partnerName!)
+              .single();
+
+      if (currency == 'VND') {
+        debtColumn = 'debt_vnd';
+      } else if (currency == 'CNY') {
+        debtColumn = 'debt_cny';
+      } else if (currency == 'USD') {
+        debtColumn = 'debt_usd';
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Loại tiền tệ không được hỗ trợ: $currency')),
+        );
+        return;
+      }
     }
 
     final currentDebt =
@@ -513,7 +539,7 @@ class _ReceiveFormState extends State<ReceiveForm> {
                             currencies.isNotEmpty ? currencies.first : null;
                         account = null;
                         note = null;
-                        partnerNames = [];
+                        this.partnerData = <Map<String, dynamic>>[];
                         isProcessing = false;
                         loadAccounts();
                       });
@@ -607,8 +633,21 @@ class _ReceiveFormState extends State<ReceiveForm> {
                       if (mounted) {
                         setState(() {
                           partnerType = val;
+                          // ✅ Nếu là Đơn vị vận chuyển, mặc định currency = 'VND'
+                          if (val == 'Đơn vị vận chuyển') {
+                            currency = 'VND';
+                          } else if (val == 'Khách hàng') {
+                            // ✅ Nếu là Khách hàng, mặc định currency = 'VND' (nếu có trong danh sách)
+                            if (currencies.contains('VND')) {
+                              currency = 'VND';
+                            }
+                          }
                           loadPartnerNames(val!);
                         });
+                        // ✅ Load accounts sau khi set currency
+                        if (val == 'Đơn vị vận chuyển' || val == 'Khách hàng') {
+                          loadAccounts();
+                        }
                       }
                     },
                   ),
@@ -617,29 +656,56 @@ class _ReceiveFormState extends State<ReceiveForm> {
                   Row(
                     children: [
                       Expanded(
-                        child: Autocomplete<String>(
+                        child: Autocomplete<Map<String, dynamic>>(
                           optionsBuilder: (textEditingValue) {
                             final query = textEditingValue.text.toLowerCase();
-                            return partnerNames
-                                .where(
-                                  (option) =>
-                                      option.toLowerCase().contains(query),
-                                )
+                            if (query.isEmpty) return partnerData.take(10).toList();
+                            final filtered = partnerData
+                                .where((option) {
+                                  final name = (option['name'] as String).toLowerCase();
+                                  final phone = (option['phone'] as String? ?? '').toLowerCase();
+                                  return name.contains(query) || phone.contains(query);
+                                })
                                 .toList()
-                              ..sort(
-                                (a, b) => a
-                                    .toLowerCase()
-                                    .indexOf(query)
-                                    .compareTo(b.toLowerCase().indexOf(query)),
-                              )
-                              ..take(3);
+                              ..sort((a, b) {
+                                final aName = (a['name'] as String).toLowerCase();
+                                final bName = (b['name'] as String).toLowerCase();
+                                // Ưu tiên khớp theo tên trước
+                                final aNameMatch = aName.contains(query);
+                                final bNameMatch = bName.contains(query);
+                                if (aNameMatch != bNameMatch) {
+                                  return aNameMatch ? -1 : 1;
+                                }
+                                // Nếu đều khớp theo phone, ưu tiên tên
+                                if (!aNameMatch && !bNameMatch) {
+                                  return aName.compareTo(bName);
+                                }
+                                final aStartsWith = aName.startsWith(query);
+                                final bStartsWith = bName.startsWith(query);
+                                if (aStartsWith != bStartsWith) {
+                                  return aStartsWith ? -1 : 1;
+                                }
+                                return aName.compareTo(bName);
+                              });
+                            return filtered.isNotEmpty 
+                                ? filtered.take(10).toList() 
+                                : [{'id': null, 'name': 'Không tìm thấy đối tác', 'phone': ''}];
+                          },
+                          displayStringForOption: (option) {
+                            final name = option['name'] as String;
+                            final phone = option['phone'] as String? ?? '';
+                            if (phone.isNotEmpty) {
+                              return '$name - $phone';
+                            }
+                            return name;
                           },
                           onSelected: (val) {
+                            if (val['id'] == null && val['name'] == 'Không tìm thấy đối tác') return;
                             if (mounted) {
                               setState(() {
-                                partnerName = val;
+                                partnerName = val['name'] as String;
                                 if (partnerType == 'Khách hàng' || partnerType == 'Nhà cung cấp' || partnerType == 'Đơn vị fix lỗi') {
-                                  partnerId = partnerIdMap[val];
+                                  partnerId = val['id'] as String?;
                                 } else {
                                   partnerId = null;
                                 }
@@ -714,10 +780,12 @@ class _ReceiveFormState extends State<ReceiveForm> {
                               (e) => DropdownMenuItem(value: e, child: Text(e)),
                             )
                             .toList(),
-                    onChanged: (val) {
+                    onChanged: partnerType == 'Đơn vị vận chuyển'
+                        ? null // ✅ Disable khi là Đơn vị vận chuyển
+                        : (val) {
                       if (mounted) {
                         setState(() {
-                          currency = val;
+                          currency = val as String?;
                           loadAccounts();
                         });
                       }

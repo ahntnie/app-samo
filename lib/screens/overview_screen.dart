@@ -621,24 +621,34 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
         },
       );
 
+      // Dùng product_id làm key chính, sau đó đối chiếu để hiển thị tên sản phẩm
       Map<String, int> productCounts = {};
       if (productDistResponse != null && productDistResponse is List) {
         for (final product in productDistResponse) {
           final productId = product['product_id']?.toString();
+          if (productId == null || productId.isEmpty) continue;
           final productCount = (product['product_count'] as num?)?.toInt() ?? 0;
-          final productName = CacheUtil.getProductName(productId);
-          productCounts[productName] = (productCounts[productName] ?? 0) + productCount;
+          // Dùng product_id làm key thay vì productName
+          productCounts[productId] = (productCounts[productId] ?? 0) + productCount;
         }
       }
 
+      // Sort theo tên sản phẩm (lấy từ cache) nhưng vẫn dùng product_id làm key
       List<MapEntry<String, int>> sortedProducts = productCounts.entries.toList()
-        ..sort((a, b) => a.key.compareTo(b.key));
+        ..sort((a, b) {
+          final nameA = CacheUtil.getProductName(a.key);
+          final nameB = CacheUtil.getProductName(b.key);
+          return nameA.compareTo(nameB);
+        });
 
       List<Map<String, dynamic>> distribution = [];
       int index = 0;
       for (var entry in sortedProducts) {
+        // Lấy tên sản phẩm từ cache dựa vào product_id
+        final productName = CacheUtil.getProductName(entry.key);
         distribution.add({
-          'name': entry.key,
+          'product_id': entry.key, // Lưu product_id để tham chiếu sau này nếu cần
+          'name': productName, // Hiển thị tên sản phẩm
           'count': entry.value,
           'color': chartColors[index % chartColors.length],
         });
@@ -657,15 +667,28 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
   }
 
   String formatMoney(num value, {String currency = 'VND'}) {
-    if (currency == 'CNY') {
+    if (currency == 'CNY' || currency == 'USD') {
       return NumberFormat('#,###', 'vi_VN').format(value);
     }
-    if (value >= 1000000) {
-      return '${(value / 1000000).toStringAsFixed(2)}tr';
-    } else if (value >= 1000) {
-      return '${(value / 1000).toStringAsFixed(0)}k';
+    // VND: chỉ dùng hàng nghìn (k), không dùng hàng triệu (tr)
+    // Đảm bảo value là số hợp lệ
+    final doubleValue = value.toDouble();
+    if (doubleValue.isNaN || doubleValue.isInfinite) {
+      return '0';
+    }
+    // Làm tròn về số nguyên để tránh vấn đề với số thập phân
+    final roundedValue = doubleValue.roundToDouble();
+    final absValue = roundedValue.abs();
+    // Luôn format theo hàng nghìn nếu >= 1000
+    // Sử dụng so sánh với epsilon để tránh vấn đề với floating point
+    if (absValue - 1000.0 >= -0.0001) {
+      final thousands = (roundedValue / 1000.0).round();
+      // Format với dấu chấm phân cách hàng nghìn
+      // Sử dụng NumberFormat với pattern '#,###' và thay dấu phẩy bằng dấu chấm
+      final formatted = NumberFormat('#,###', 'vi_VN').format(thousands.abs()).replaceAll(',', '.');
+      return thousands < 0 ? '-$formatted k' : '$formatted k';
     } else {
-      return value.toStringAsFixed(0);
+      return roundedValue.toStringAsFixed(0);
     }
   }
 
@@ -799,6 +822,41 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
                 ),
                 borderData: FlBorderData(show: true),
                 gridData: const FlGridData(show: true),
+                lineTouchData: LineTouchData(
+                  getTouchedSpotIndicator: (LineChartBarData barData, List<int> spotIndexes) {
+                    final barColor = barData.color ?? Colors.blue;
+                    return spotIndexes.map((index) {
+                      return TouchedSpotIndicatorData(
+                        FlLine(color: barColor, strokeWidth: 2),
+                        FlDotData(
+                          getDotPainter: (spot, percent, barData, index) => FlDotCirclePainter(
+                            radius: 6,
+                            color: barColor,
+                            strokeWidth: 2,
+                            strokeColor: Colors.white,
+                          ),
+                        ),
+                      );
+                    }).toList();
+                  },
+                  touchTooltipData: LineTouchTooltipData(
+                    getTooltipItems: (List<LineBarSpot> touchedSpots) {
+                      return touchedSpots.map((LineBarSpot touchedSpot) {
+                        final value = touchedSpot.y;
+                        final formattedValue = NumberFormat('#,###', 'vi_VN').format(value.round()).replaceAll(',', '.');
+                        final barColor = touchedSpot.bar.color ?? Colors.blue;
+                        return LineTooltipItem(
+                          '$formattedValue VND',
+                          TextStyle(
+                            color: barColor,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 14,
+                          ),
+                        );
+                      }).toList();
+                    },
+                  ),
+                ),
               ),
             ),
           ),

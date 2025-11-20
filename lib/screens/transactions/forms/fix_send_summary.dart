@@ -4,7 +4,6 @@ import '../../notification_service.dart';
 import 'fix_send_form.dart';
 import 'dart:math' as math;
 import 'package:intl/intl.dart';
-import '../../../helpers/error_handler.dart';
 
 // Constants for batch processing and limits
 const int maxBatchSize = 1000;
@@ -75,7 +74,10 @@ class _FixSendSummaryState extends State<FixSendSummary> {
         for (int i = 0; i < imeiList.length; i += maxBatchSize) {
           final batchImeis = imeiList.sublist(i, math.min(i + maxBatchSize, imeiList.length));
           final response = await retry(
-            () => supabase.from('products').select('imei, product_id, status, send_fix_date').inFilter('imei', batchImeis),
+            () => supabase
+                .from('products')
+                .select('imei, product_id, status, send_fix_date, fix_unit, fix_unit_id')
+                .inFilter('imei', batchImeis),
             operation: 'Fetch products snapshot batch ${i ~/ maxBatchSize + 1}',
           );
           productsData.addAll(response.cast<Map<String, dynamic>>());
@@ -187,6 +189,25 @@ class _FixSendSummaryState extends State<FixSendSummary> {
       final now = DateTime.now();
       final ticketId = generateTicketId();
 
+      // Hiển thị loading trong lúc tạo phiếu để tránh người dùng nghĩ app bị treo
+      showDialog(
+        context: scaffoldContext,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          content: Row(
+            children: const [
+              SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              SizedBox(width: 16),
+              Expanded(child: Text('Đang tạo phiếu...')),
+            ],
+          ),
+        ),
+      );
+
       // Validate IMEIs
       List<String> validImeis = [];
       for (int i = 0; i < allImeis.length; i += maxBatchSize) {
@@ -208,27 +229,20 @@ class _FixSendSummaryState extends State<FixSendSummary> {
 
       final invalidImeis = allImeis.where((imei) => !validImeis.contains(imei)).toList();
       if (invalidImeis.isNotEmpty) {
+        // Đóng loading trước khi báo lỗi
+        if (Navigator.of(scaffoldContext, rootNavigator: true).canPop()) {
+          Navigator.of(scaffoldContext, rootNavigator: true).pop();
+        }
         throw Exception('Các IMEI sau không hợp lệ: ${invalidImeis.take(10).join(', ')}${invalidImeis.length > 10 ? '...' : ''}');
       }
 
-      // Create snapshot
+      // Create snapshot (vẫn build snapshot ở client để giữ format cũ, khôi phục không đổi)
       final snapshotData = await retry(
         () => _createSnapshot(ticketId, allImeis),
         operation: 'Create snapshot',
       );
 
-      // Insert snapshot
-      await retry(
-        () => supabase.from('snapshots').insert({
-          'ticket_id': ticketId,
-          'ticket_table': 'fix_send_orders',
-          'snapshot_data': snapshotData,
-          'created_at': now.toIso8601String(),
-        }),
-        operation: 'Insert snapshot',
-      );
-
-      // Prepare and insert fix send orders
+      // Chuẩn bị dữ liệu phiếu gửi sửa
       final fixSendOrders = widget.ticketItems.map((item) {
         return {
           'ticket_id': ticketId,
@@ -243,26 +257,19 @@ class _FixSendSummaryState extends State<FixSendSummary> {
         };
       }).toList();
 
+      // Gọi Supabase RPC để thực hiện toàn bộ transaction (insert snapshot + fix_send_orders + update products)
       await retry(
-        () => supabase.from('fix_send_orders').insert(fixSendOrders),
-        operation: 'Insert fix_send_orders',
-      );
-
-      // Update products
-      for (var item in widget.ticketItems) {
-        final imeiList = (item['imei'] as String).split(',').where((e) => e.trim().isNotEmpty).toList();
-        for (int i = 0; i < imeiList.length; i += maxBatchSize) {
-          final batchImeis = imeiList.sublist(i, math.min(i + maxBatchSize, imeiList.length));
-          await retry(
-            () => supabase.from('products').update({
-              'status': 'Đang sửa',
-              'fix_unit': item['fixer'],
-              'send_fix_date': now.toIso8601String(),
-            }).inFilter('imei', batchImeis),
-            operation: 'Update products batch ${i ~/ maxBatchSize + 1}',
+        () => supabase.rpc(
+          'create_fix_send_transaction',
+          params: {
+            'p_ticket_id': ticketId,
+            'p_fix_send_orders': fixSendOrders,
+            'p_snapshot_data': snapshotData,
+            'p_created_at': now.toIso8601String(),
+          },
+        ),
+        operation: 'Create fix_send_transaction',
           );
-        }
-      }
 
       await NotificationService.showNotification(
         131,
@@ -279,6 +286,10 @@ class _FixSendSummaryState extends State<FixSendSummary> {
       );
 
       if (mounted) {
+        // Đóng loading trước khi hiển thị thông báo thành công
+        if (Navigator.of(scaffoldContext, rootNavigator: true).canPop()) {
+          Navigator.of(scaffoldContext, rootNavigator: true).pop();
+        }
         setState(() {
           isProcessing = false;
         });
@@ -301,6 +312,10 @@ class _FixSendSummaryState extends State<FixSendSummary> {
       }
     } catch (e) {
       if (mounted) {
+        // Đóng loading trước khi hiển thị lỗi
+        if (Navigator.of(scaffoldContext, rootNavigator: true).canPop()) {
+          Navigator.of(scaffoldContext, rootNavigator: true).pop();
+        }
         setState(() {
           isProcessing = false;
         });

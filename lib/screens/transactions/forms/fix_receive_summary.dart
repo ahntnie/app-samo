@@ -3,7 +3,6 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import '../../notification_service.dart';
 import 'fix_receive_form.dart';
-import '../../../helpers/error_handler.dart';
 import 'dart:math' as math;
 
 // Cache utility class
@@ -291,110 +290,7 @@ class _FixReceiveSummaryState extends State<FixReceiveSummary> {
     }
   }
 
-  Future<void> _rollbackChanges(Map<String, dynamic> snapshot, String ticketId) async {
-    final supabase = widget.tenantClient;
-    
-    try {
-      // Rollback fix units
-      if (snapshot['fix_units'] != null) {
-        for (var fixUnit in snapshot['fix_units']) {
-          await supabase
-            .from('fix_units')
-            .update(fixUnit)
-            .eq('name', fixUnit['name']);
-        }
-      }
-
-      // Rollback financial accounts
-      if (snapshot['financial_accounts'] != null && account != null) {
-        await supabase
-          .from('financial_accounts')
-          .update(snapshot['financial_accounts'])
-          .eq('name', account!)
-          .eq('currency', widget.currency);
-      }
-
-      // Rollback products
-      if (snapshot['products'] != null) {
-        for (var product in snapshot['products']) {
-          await supabase
-            .from('products')
-            .update(product)
-            .eq('imei', product['imei']);
-        }
-      }
-
-      // Delete created fix receive orders
-      await supabase
-        .from('fix_receive_orders')
-        .delete()
-        .eq('ticket_id', ticketId);
-
-    } catch (e) {
-      print('Error during rollback: $e');
-      throw Exception('Lỗi khi rollback dữ liệu: $e');
-    }
-  }
-
-  Future<bool> _verifyData(String ticketId, List<String> imeiList) async {
-    final supabase = widget.tenantClient;
-    
-    try {
-      // Verify fix units data if using debt
-      if (account == 'Công nợ') {
-        final fixerNames = ticketItems.map((item) => item['fixer'] as String).toSet();
-        for (var fixer in fixerNames) {
-          final fixerData = await supabase
-              .from('fix_units')
-              .select()
-              .eq('name', fixer)
-              .single();
-          if (fixerData == null) return false;
-        }
-      }
-      
-      // Verify products data
-      final productsData = await supabase
-          .from('products')
-          .select('status, fix_unit, warehouse_id')
-          .inFilter('imei', imeiList);
-      
-      // Verify fix receive orders
-      final fixReceiveOrders = await supabase
-          .from('fix_receive_orders')
-          .select()
-          .eq('ticket_id', ticketId);
-
-      // Verify all IMEIs are marked as in stock and assigned to correct warehouse
-      for (var product in productsData) {
-        if (product['status'] != 'Tồn kho' || 
-            product['fix_unit'] != null) {
-          return false;
-        }
-      }
-
-      // Verify all fix receive orders are created
-      if (fixReceiveOrders.length != ticketItems.length) {
-        return false;
-      }
-
-      // Verify financial account if used
-      if (account != null && account != 'Công nợ') {
-        final accountData = await supabase
-            .from('financial_accounts')
-            .select()
-            .eq('name', account!)
-            .eq('currency', widget.currency)
-            .single();
-        if (accountData == null) return false;
-      }
-
-      return true;
-    } catch (e) {
-      print('Error during data verification: $e');
-      return false;
-    }
-  }
+  // ✅ Không cần rollback/verify thủ công nữa khi dùng function Supabase (transaction atomic)
 
   Future<void> createTicket(BuildContext scaffoldContext) async {
     if (isProcessing) return;
@@ -532,18 +428,26 @@ class _FixReceiveSummaryState extends State<FixReceiveSummary> {
         }
       }
 
-      // Insert snapshot
-      await retry(
-        () => supabase.from('snapshots').insert({
-          'ticket_id': ticketId,
-          'ticket_table': 'fix_receive_orders',
-          'snapshot_data': snapshot,
-          'created_at': now.toIso8601String(),
-        }),
-        operation: 'Insert snapshot',
+      // Hiển thị loading trong lúc tạo phiếu để tránh người dùng nghĩ app bị treo
+      showDialog(
+        context: scaffoldContext,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          content: Row(
+            children: const [
+              SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              SizedBox(width: 16),
+              Expanded(child: Text('Đang tạo phiếu...')),
+            ],
+          ),
+        ),
       );
 
-      // Prepare and insert fix receive orders
+      // Chuẩn bị dữ liệu fix_receive_orders (như cũ)
       final fixReceiveOrders = ticketItems.map((item) {
         return {
           'ticket_id': ticketId,
@@ -561,116 +465,21 @@ class _FixReceiveSummaryState extends State<FixReceiveSummary> {
         };
       }).toList();
 
+      // Gọi Supabase RPC - toàn bộ insert/update/rollback do DB xử lý atomic
       await retry(
-        () => supabase.from('fix_receive_orders').insert(fixReceiveOrders),
-        operation: 'Insert fix_receive_orders',
+        () => supabase.rpc(
+          'create_fix_receive_transaction',
+          params: {
+            'p_ticket_id': ticketId,
+            'p_fix_receive_orders': fixReceiveOrders,
+            'p_account': account,
+            'p_currency': widget.currency,
+            'p_snapshot_data': snapshot,
+            'p_created_at': now.toIso8601String(),
+          },
+        ),
+        operation: 'Create fix_receive_transaction',
       );
-
-      // Update products
-      for (var item in ticketItems) {
-        final imeiList = (item['imei'] as String).split(',').where((e) => e.trim().isNotEmpty).toList();
-        for (var imei in imeiList) {
-          num fixCostPerItemInVND = item['price'] as num;
-          if (item['currency'] == 'CNY') {
-            fixCostPerItemInVND *= exchangeRate;
-          } else if (item['currency'] == 'USD') {
-            fixCostPerItemInVND *= exchangeRate;
-          }
-
-          // Lấy giá vốn ban đầu (cost_price) và giá fix lỗi hiện tại (fix_price) từ bảng products
-          final productResponse = await retry(
-            () => supabase
-                .from('products')
-                .select('cost_price, fix_price')
-                .eq('imei', imei)
-                .eq('product_id', item['product_id'])
-                .single(),
-            operation: 'Fetch cost_price and fix_price for product $imei',
-          );
-
-          final oldCostPrice = productResponse['cost_price'] as num? ?? 0;
-          final oldFixPrice = productResponse['fix_price'] as num? ?? 0; // Lấy fix_price cũ, mặc định là 0 nếu null
-          final newCostPrice = oldCostPrice + fixCostPerItemInVND;
-          final newFixPrice = oldFixPrice + fixCostPerItemInVND; // Cộng dồn fix_price cũ với fixCostPerItemInVND
-
-          await retry(
-            () => supabase.from('products').update({
-              'status': 'Tồn kho',
-              'fix_unit': null,
-              'send_fix_date': null,
-              'warehouse_id': item['warehouse_id'],
-              'fix_price': newFixPrice, // Cập nhật fix_price mới
-              'fix_currency': 'VND',
-              'fix_receive_date': now.toIso8601String(),
-              'cost_price': newCostPrice,
-            }).eq('imei', imei).eq('product_id', item['product_id']),
-            operation: 'Update product $imei',
-          );
-        }
-      }
-
-      // Update financial data
-      if (account == 'Công nợ') {
-        for (var item in ticketItems) {
-          final fixer = item['fixer'] as String;
-          final debtColumn = 'debt_${widget.currency.toLowerCase()}';
-          final currentDebtResponse = await retry(
-            () => supabase
-                .from('fix_units')
-                .select(debtColumn)
-                .eq('name', fixer)
-                .single(),
-            operation: 'Fetch fixer debt',
-          );
-          final currentDebt = currentDebtResponse[debtColumn] as num? ?? 0;
-          final itemAmount = (item['price'] as num) * (item['quantity'] as int);
-          final updatedDebt = currentDebt + itemAmount;
-          // Get fixer_id for this fixer name
-          final fixerIdForDebt = ticketItems.firstWhere(
-            (item) => item['fixer'] == fixer,
-            orElse: () => {},
-          )['fixer_id']?.toString();
-          
-          if (fixerIdForDebt != null) {
-            await retry(
-              () => supabase
-                  .from('fix_units')
-                  .update({debtColumn: updatedDebt})
-                  .eq('id', fixerIdForDebt),
-              operation: 'Update fixer debt for $fixer',
-            );
-          } else {
-            // Fallback to name for backward compatibility
-            await retry(
-              () => supabase
-                  .from('fix_units')
-                  .update({debtColumn: updatedDebt})
-                  .eq('name', fixer),
-              operation: 'Update fixer debt for $fixer (fallback)',
-            );
-          }
-        }
-      } else {
-        final selectedAccount = accounts.firstWhere((acc) => acc['name'] == account);
-        final currentBalance = selectedAccount['balance'] as num? ?? 0;
-        final updatedBalance = currentBalance - totalAmount;
-        await retry(
-          () => supabase
-              .from('financial_accounts')
-              .update({'balance': updatedBalance})
-              .eq('name', account!)
-              .eq('currency', widget.currency),
-            operation: 'Update financial account balance',
-        );
-      }
-
-      // After all updates, verify the data
-      final isDataValid = await _verifyData(ticketId, allImeis);
-      if (!isDataValid) {
-        // If data verification fails, rollback changes
-        await _rollbackChanges(snapshot, ticketId);
-        throw Exception('Dữ liệu không khớp sau khi cập nhật. Đã rollback thay đổi.');
-      }
 
       await NotificationService.showNotification(
         130,
@@ -687,6 +496,10 @@ class _FixReceiveSummaryState extends State<FixReceiveSummary> {
       );
 
       if (mounted) {
+        // Đóng loading trước khi hiển thị thông báo thành công
+        if (Navigator.of(scaffoldContext, rootNavigator: true).canPop()) {
+          Navigator.of(scaffoldContext, rootNavigator: true).pop();
+        }
         setState(() {
           isProcessing = false;
         });
@@ -708,14 +521,11 @@ class _FixReceiveSummaryState extends State<FixReceiveSummary> {
         );
       }
     } catch (e) {
-      // If any error occurs, rollback changes
-      try {
-        await _rollbackChanges(snapshot, ticketId);
-      } catch (rollbackError) {
-        print('Rollback failed: $rollbackError');
-      }
-
       if (mounted) {
+        // Đóng loading trước khi hiển thị lỗi
+        if (Navigator.of(scaffoldContext, rootNavigator: true).canPop()) {
+          Navigator.of(scaffoldContext, rootNavigator: true).pop();
+        }
         setState(() {
           isProcessing = false;
           errorMessage = e.toString();

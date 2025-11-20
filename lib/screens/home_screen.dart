@@ -82,6 +82,8 @@ class _HomeScreenState extends State<HomeScreen> {
     'view_supplier',
     'view_sale_price',
     'view_customer',
+    'view_transporter',
+    'view_fixer',
     'create_transaction',
     'edit_transaction',
     'cancel_transaction',
@@ -224,12 +226,16 @@ class _HomeScreenState extends State<HomeScreen> {
       // Nếu là admin, đảm bảo có tất cả quyền
       var userPermissions = (response['permissions'] as List<dynamic>?)?.map((perm) => perm.toString()).toList() ?? [];
       if (response['username'].toString().toLowerCase() == 'admin') {
-        if (!userPermissions.every((perm) => allPermissions.contains(perm))) {
+        // Kiểm tra xem admin có thiếu quyền nào không
+        final missingPermissions = allPermissions.where((perm) => !userPermissions.contains(perm)).toList();
+        if (missingPermissions.isNotEmpty) {
+          // Cập nhật quyền cho admin trong database
           await widget.tenantClient
               .from('sub_accounts')
               .update({'permissions': allPermissions})
               .eq('username', 'admin');
-          userPermissions = allPermissions;
+          userPermissions = List<String>.from(allPermissions);
+          print('✅ Updated admin permissions. Added: $missingPermissions');
         }
       }
 

@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:timezone/timezone.dart' as tz;
 import 'package:timezone/data/latest.dart' as tz;
 import 'dart:convert';
+import '../helpers/global_cache_manager.dart';
 
 class NotificationService {
   static final FlutterLocalNotificationsPlugin
@@ -110,32 +111,22 @@ class NotificationService {
       },
     );
 
-    // Always try to get and save the FCM token for this device.
-    // Previously this was only done on first login; that caused other
-    // devices to never register their tokens and therefore not receive
-    // push notifications. _saveDeviceToken already deduplicates tokens,
-    // so calling this on each init is safe.
-    try {
-      final fcmToken = await FirebaseMessaging.instance.getToken();
-      print('FCM token: $fcmToken');
-      if (fcmToken != null) {
-        await _saveDeviceToken(fcmToken);
-      } else {
-        print('Không thể lấy FCM token');
-      }
-    } catch (e) {
-      print('Lỗi khi lấy FCM token: $e');
-    }
-
-    // Listen for token refresh and save updated tokens
-    FirebaseMessaging.instance.onTokenRefresh.listen((newToken) async {
+    // ✅ CHỈ lấy và lưu FCM token khi đăng nhập lần đầu tiên
+    if (shouldGetFCMToken) {
       try {
-        print('FCM token refreshed: $newToken');
-        if (newToken != null) await _saveDeviceToken(newToken);
+        final fcmToken = await FirebaseMessaging.instance.getToken();
+        print('✅ FCM token (first login): $fcmToken');
+        if (fcmToken != null) {
+          await _saveDeviceToken(fcmToken);
+        } else {
+          print('Không thể lấy FCM token');
+        }
       } catch (e) {
-        print('Lỗi khi lưu FCM token mới: $e');
+        print('Lỗi khi lấy FCM token: $e');
       }
-    });
+    } else {
+      print('⏭️ Skip FCM token retrieval (already logged in)');
+    }
 
     // Lập lịch thông báo định kỳ (gate theo quyền)
     if (_permissions.contains('access_customers_screen')) {
@@ -474,9 +465,13 @@ class NotificationService {
   static Future<void> checkOverdueProducts() async {
     final now = DateTime.now();
 
+    // Đảm bảo cache đã được load
+    final cacheManager = GlobalCacheManager();
+    await cacheManager.fetchAndCacheProducts(_tenantClient);
+
     final response = await _tenantClient
         .from('products')
-        .select('name, imei, import_transfer_date')
+        .select('product_id, imei, import_transfer_date')
         .not('import_transfer_date', 'is', null)
         .not('status', 'eq', 'Đã bán');
 
@@ -488,7 +483,10 @@ class NotificationService {
     final products = response;
     if (products.isEmpty) return;
 
-    int notificationId = 100;
+    // Gom sản phẩm theo (productName, daysSinceImport)
+    // Key: "productName|daysSinceImport", Value: count
+    final Map<String, int> groupedProducts = {};
+
     for (var product in products) {
       final importDate = DateTime.parse(
         product['import_transfer_date'] as String,
@@ -496,21 +494,43 @@ class NotificationService {
       final daysSinceImport = now.difference(importDate).inDays;
 
       if (daysSinceImport > 7) {
-        final productName = product['name'] as String?;
-        if (productName == null) continue;
-        final imei = (product['imei']?.toString() ?? '').trim();
-        final imeiDisplay = imei.isEmpty ? 'N/A' : imei;
-        final title = "Nhắc Bán Sản Phẩm";
-        final message =
-            "Sản phẩm $productName IMEI $imeiDisplay đã tồn kho $daysSinceImport ngày. bán nhanh kẻo lỗ chết mẹ bây giờ";
+        final productId = product['product_id']?.toString();
+        if (productId == null || productId.isEmpty) continue;
 
-        await showNotification(
-          notificationId++,
-          title,
-          message,
-          'overdue_product',
-        );
+        // Lấy tên sản phẩm từ cache
+        final productName = cacheManager.getProductName(productId);
+        if (productName.isEmpty || productName == 'Không xác định') continue;
+
+        // Tạo key để gom: "productName|daysSinceImport"
+        final key = '$productName|$daysSinceImport';
+        groupedProducts[key] = (groupedProducts[key] ?? 0) + 1;
       }
+    }
+
+    if (groupedProducts.isEmpty) {
+      print('Không có sản phẩm tồn kho lâu để thông báo');
+      return;
+    }
+
+    // Tạo thông báo gộp cho mỗi nhóm
+    int notificationId = 100;
+    for (var entry in groupedProducts.entries) {
+      final parts = entry.key.split('|');
+      final productName = parts[0];
+      final daysSinceImport = int.parse(parts[1]);
+      final count = entry.value;
+
+      final title = "Nhắc Bán Sản Phẩm";
+      final message = count == 1
+          ? "Sản phẩm $productName đã tồn kho $daysSinceImport ngày. bán nhanh kẻo lỗ chết mẹ bây giờ"
+          : "$count sản phẩm $productName đã tồn kho $daysSinceImport ngày. bán nhanh kẻo lỗ chết mẹ bây giờ";
+
+      await showNotification(
+        notificationId++,
+        title,
+        message,
+        'overdue_product',
+      );
     }
   }
 

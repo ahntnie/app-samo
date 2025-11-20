@@ -68,6 +68,8 @@ class _AccountScreenState extends State<AccountScreen> {
     {'value': 'view_supplier', 'display': 'Xem nhà cung cấp'},
     {'value': 'view_sale_price', 'display': 'Xem giá bán'},
     {'value': 'view_customer', 'display': 'Xem khách hàng'},
+    {'value': 'view_transporter', 'display': 'Xem đơn vị vận chuyển'},
+    {'value': 'view_fixer', 'display': 'Xem đơn vị fix lỗi'},
     {'value': 'create_transaction', 'display': 'Tạo giao dịch'},
     {'value': 'edit_transaction', 'display': 'Sửa giao dịch'},
     {'value': 'cancel_transaction', 'display': 'Hủy giao dịch'},
