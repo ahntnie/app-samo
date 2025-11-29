@@ -49,6 +49,8 @@ class _ReceiveFormState extends State<ReceiveForm> {
   String? account;
   String? note;
   bool isProcessing = false;
+  Map<String, num>? currentDebt; // Lưu công nợ hiện tại: {'debt_vnd': ..., 'debt_cny': ..., 'debt_usd': ...} hoặc {'debt': ...} cho transporters
+  bool isLoadingDebt = false;
 
   final _formKey = GlobalKey<FormState>();
 
@@ -136,6 +138,64 @@ class _ReceiveFormState extends State<ReceiveForm> {
       }
     } catch (e) {
       print('Error loading accounts: $e');
+    }
+  }
+
+  Future<void> loadCurrentDebt() async {
+    if (partnerName == null || partnerType == null) {
+      setState(() {
+        currentDebt = null;
+      });
+      return;
+    }
+
+    setState(() {
+      isLoadingDebt = true;
+    });
+
+    try {
+      final table = getTable(partnerType!);
+      
+      if (partnerType == 'Đơn vị vận chuyển') {
+        final partnerData = await widget.tenantClient
+            .from(table)
+            .select('debt')
+            .eq('name', partnerName!)
+            .single();
+        
+        setState(() {
+          currentDebt = {
+            'debt': (partnerData['debt'] as num?) ?? 0,
+          };
+          isLoadingDebt = false;
+        });
+      } else {
+        final partnerData = (partnerType == 'Khách hàng' || partnerType == 'Nhà cung cấp' || partnerType == 'Đơn vị fix lỗi') && partnerId != null
+            ? await widget.tenantClient
+                .from(table)
+                .select('debt_vnd, debt_cny, debt_usd')
+                .eq('id', partnerId!)
+                .single()
+            : await widget.tenantClient
+                .from(table)
+                .select('debt_vnd, debt_cny, debt_usd')
+                .eq('name', partnerName!)
+                .single();
+
+        setState(() {
+          currentDebt = {
+            'debt_vnd': (partnerData['debt_vnd'] as num?) ?? 0,
+            'debt_cny': (partnerData['debt_cny'] as num?) ?? 0,
+            'debt_usd': (partnerData['debt_usd'] as num?) ?? 0,
+          };
+          isLoadingDebt = false;
+        });
+      }
+    } catch (e) {
+      setState(() {
+        currentDebt = null;
+        isLoadingDebt = false;
+      });
     }
   }
 
@@ -633,6 +693,9 @@ class _ReceiveFormState extends State<ReceiveForm> {
                       if (mounted) {
                         setState(() {
                           partnerType = val;
+                          partnerName = null;
+                          partnerId = null;
+                          currentDebt = null;
                           // ✅ Nếu là Đơn vị vận chuyển, mặc định currency = 'VND'
                           if (val == 'Đơn vị vận chuyển') {
                             currency = 'VND';
@@ -653,88 +716,142 @@ class _ReceiveFormState extends State<ReceiveForm> {
                   ),
                 ),
                 wrapField(
-                  Row(
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(
-                        child: Autocomplete<Map<String, dynamic>>(
-                          optionsBuilder: (textEditingValue) {
-                            final query = textEditingValue.text.toLowerCase();
-                            if (query.isEmpty) return partnerData.take(10).toList();
-                            final filtered = partnerData
-                                .where((option) {
-                                  final name = (option['name'] as String).toLowerCase();
-                                  final phone = (option['phone'] as String? ?? '').toLowerCase();
-                                  return name.contains(query) || phone.contains(query);
-                                })
-                                .toList()
-                              ..sort((a, b) {
-                                final aName = (a['name'] as String).toLowerCase();
-                                final bName = (b['name'] as String).toLowerCase();
-                                // Ưu tiên khớp theo tên trước
-                                final aNameMatch = aName.contains(query);
-                                final bNameMatch = bName.contains(query);
-                                if (aNameMatch != bNameMatch) {
-                                  return aNameMatch ? -1 : 1;
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Autocomplete<Map<String, dynamic>>(
+                              optionsBuilder: (textEditingValue) {
+                                final query = textEditingValue.text.toLowerCase();
+                                if (query.isEmpty) return partnerData.take(10).toList();
+                                final filtered = partnerData
+                                    .where((option) {
+                                      final name = (option['name'] as String).toLowerCase();
+                                      final phone = (option['phone'] as String? ?? '').toLowerCase();
+                                      return name.contains(query) || phone.contains(query);
+                                    })
+                                    .toList()
+                                  ..sort((a, b) {
+                                    final aName = (a['name'] as String).toLowerCase();
+                                    final bName = (b['name'] as String).toLowerCase();
+                                    // Ưu tiên khớp theo tên trước
+                                    final aNameMatch = aName.contains(query);
+                                    final bNameMatch = bName.contains(query);
+                                    if (aNameMatch != bNameMatch) {
+                                      return aNameMatch ? -1 : 1;
+                                    }
+                                    // Nếu đều khớp theo phone, ưu tiên tên
+                                    if (!aNameMatch && !bNameMatch) {
+                                      return aName.compareTo(bName);
+                                    }
+                                    final aStartsWith = aName.startsWith(query);
+                                    final bStartsWith = bName.startsWith(query);
+                                    if (aStartsWith != bStartsWith) {
+                                      return aStartsWith ? -1 : 1;
+                                    }
+                                    return aName.compareTo(bName);
+                                  });
+                                return filtered.isNotEmpty 
+                                    ? filtered.take(10).toList() 
+                                    : [{'id': null, 'name': 'Không tìm thấy đối tác', 'phone': ''}];
+                              },
+                              displayStringForOption: (option) {
+                                final name = option['name'] as String;
+                                final phone = option['phone'] as String? ?? '';
+                                if (phone.isNotEmpty) {
+                                  return '$name - $phone';
                                 }
-                                // Nếu đều khớp theo phone, ưu tiên tên
-                                if (!aNameMatch && !bNameMatch) {
-                                  return aName.compareTo(bName);
+                                return name;
+                              },
+                              onSelected: (val) async {
+                                if (val['id'] == null && val['name'] == 'Không tìm thấy đối tác') return;
+                                if (mounted) {
+                                  setState(() {
+                                    partnerName = val['name'] as String;
+                                    if (partnerType == 'Khách hàng' || partnerType == 'Nhà cung cấp' || partnerType == 'Đơn vị fix lỗi') {
+                                      partnerId = val['id'] as String?;
+                                    } else {
+                                      partnerId = null;
+                                    }
+                                  });
+                                  await loadCurrentDebt();
                                 }
-                                final aStartsWith = aName.startsWith(query);
-                                final bStartsWith = bName.startsWith(query);
-                                if (aStartsWith != bStartsWith) {
-                                  return aStartsWith ? -1 : 1;
-                                }
-                                return aName.compareTo(bName);
-                              });
-                            return filtered.isNotEmpty 
-                                ? filtered.take(10).toList() 
-                                : [{'id': null, 'name': 'Không tìm thấy đối tác', 'phone': ''}];
-                          },
-                          displayStringForOption: (option) {
-                            final name = option['name'] as String;
-                            final phone = option['phone'] as String? ?? '';
-                            if (phone.isNotEmpty) {
-                              return '$name - $phone';
-                            }
-                            return name;
-                          },
-                          onSelected: (val) {
-                            if (val['id'] == null && val['name'] == 'Không tìm thấy đối tác') return;
-                            if (mounted) {
-                              setState(() {
-                                partnerName = val['name'] as String;
-                                if (partnerType == 'Khách hàng' || partnerType == 'Nhà cung cấp' || partnerType == 'Đơn vị fix lỗi') {
-                                  partnerId = val['id'] as String?;
-                                } else {
-                                  partnerId = null;
-                                }
-                              });
-                            }
-                          },
-                          fieldViewBuilder: (
-                            context,
-                            controller,
-                            focusNode,
-                            onFieldSubmitted,
-                          ) {
-                            return TextFormField(
-                              controller: controller,
-                              focusNode: focusNode,
-                              decoration: const InputDecoration(
-                                labelText: 'Tên đối tác',
-                                border: InputBorder.none,
-                                isDense: true,
-                              ),
-                            );
-                          },
-                        ),
+                              },
+                              fieldViewBuilder: (
+                                context,
+                                controller,
+                                focusNode,
+                                onFieldSubmitted,
+                              ) {
+                                return TextFormField(
+                                  controller: controller,
+                                  focusNode: focusNode,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Tên đối tác',
+                                    border: InputBorder.none,
+                                    isDense: true,
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                          IconButton(
+                            onPressed:
+                                partnerType != null ? addPartnerDialog : null,
+                            icon: const Icon(Icons.add_circle_outline),
+                          ),
+                        ],
                       ),
-                      IconButton(
-                        onPressed:
-                            partnerType != null ? addPartnerDialog : null,
-                        icon: const Icon(Icons.add_circle_outline),
-                      ),
+                      if (partnerName != null) ...[
+                        const SizedBox(height: 8),
+                        isLoadingDebt
+                            ? const Padding(
+                                padding: EdgeInsets.only(left: 12),
+                                child: SizedBox(
+                                  height: 16,
+                                  width: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                ),
+                              )
+                            : currentDebt != null
+                                ? Padding(
+                                    padding: const EdgeInsets.only(left: 12),
+                                    child: Builder(
+                                      builder: (context) {
+                                        if (partnerType == 'Đơn vị vận chuyển') {
+                                          final debt = currentDebt!['debt'] ?? 0;
+                                          return Text(
+                                            'Công nợ hiện tại: ${formatNumberLocal(debt)} VND',
+                                            style: TextStyle(
+                                              color: debt > 0 ? Colors.red : Colors.green,
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                          );
+                                        } else {
+                                          final debtVnd = currentDebt!['debt_vnd'] ?? 0;
+                                          final debtCny = currentDebt!['debt_cny'] ?? 0;
+                                          final debtUsd = currentDebt!['debt_usd'] ?? 0;
+                                          final debtDetails = <String>[];
+                                          if (debtVnd != 0) debtDetails.add('${formatNumberLocal(debtVnd)} VND');
+                                          if (debtCny != 0) debtDetails.add('${formatNumberLocal(debtCny)} CNY');
+                                          if (debtUsd != 0) debtDetails.add('${formatNumberLocal(debtUsd)} USD');
+                                          final debtText = debtDetails.isNotEmpty ? debtDetails.join(', ') : '0 VND';
+                                          final totalDebt = debtVnd + debtCny + debtUsd;
+                                          return Text(
+                                            'Công nợ hiện tại: $debtText',
+                                            style: TextStyle(
+                                              color: totalDebt > 0 ? Colors.red : Colors.green,
+                                              fontWeight: FontWeight.w500,
+                                            ),
+                                          );
+                                        }
+                                      },
+                                    ),
+                                  )
+                                : const SizedBox.shrink(),
+                      ],
                     ],
                   ),
                 ),

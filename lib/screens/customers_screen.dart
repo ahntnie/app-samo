@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart' hide Border, BorderStyle;
+import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import 'package:excel/excel.dart';
@@ -39,6 +40,69 @@ String formatDate(String? dateStr) {
   }
 }
 
+// Widget hiển thị text có thể copy khi bấm giữ
+class CopyableText extends StatelessWidget {
+  final String label;
+  final String value;
+
+  const CopyableText({
+    super.key,
+    required this.label,
+    required this.value,
+  });
+
+  void _showCopyNotification(BuildContext context) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => PopScope(
+        canPop: false,
+        child: Dialog(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+            decoration: BoxDecoration(
+              color: Colors.black87,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.check_circle, color: Colors.green, size: 24),
+                SizedBox(width: 12),
+                Text(
+                  'Đã sao chép vào clipboard',
+                  style: TextStyle(color: Colors.white, fontSize: 14),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    
+    Future.delayed(const Duration(milliseconds: 1000), () {
+      if (context.mounted) {
+        Navigator.of(context).pop();
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onLongPress: () {
+        if (value.isNotEmpty) {
+          Clipboard.setData(ClipboardData(text: value));
+          _showCopyNotification(context);
+        }
+      },
+      child: Text('$label: $value'),
+    );
+  }
+}
+
 class CustomersScreen extends StatefulWidget {
   final List<String> permissions;
   final SupabaseClient tenantClient;
@@ -67,6 +131,8 @@ class _CustomersScreenState extends State<CustomersScreen> {
   bool isLoadingMore = false;
   final ScrollController _scrollController = ScrollController();
   Timer? _debounce;
+  Map<String, DateTime?> latestOrderDateCache = {};
+  bool isLoadingLatestDates = false;
 
   @override
   void initState() {
@@ -192,6 +258,68 @@ class _CustomersScreenState extends State<CustomersScreen> {
     }
   }
 
+  Future<DateTime?> _getLatestOrderDate(String customerId) async {
+    try {
+      final saleOrdersResponse = await widget.tenantClient
+          .from('sale_orders')
+          .select('created_at')
+          .eq('customer_id', customerId)
+          .eq('iscancelled', false)
+          .order('created_at', ascending: false)
+          .limit(1);
+
+      final saleOrders = saleOrdersResponse as List<dynamic>;
+      
+      if (saleOrders.isNotEmpty) {
+        final dateStr = saleOrders[0]['created_at']?.toString();
+        if (dateStr != null && dateStr.isNotEmpty) {
+          final date = DateTime.tryParse(dateStr);
+          return date;
+        }
+      }
+
+      return null;
+    } catch (e) {
+      developer.log('Error getting latest order date for customer $customerId: $e');
+      return null;
+    }
+  }
+
+  Future<void> _loadLatestOrderDates() async {
+    if (isLoadingLatestDates) return;
+
+    setState(() {
+      isLoadingLatestDates = true;
+      latestOrderDateCache.clear();
+    });
+
+    try {
+      final customersWithDebt = (searchText.isNotEmpty ? searchResults : customers)
+          .where((customer) {
+            final debtVnd = customer['debt_vnd'] as num? ?? 0;
+            final debtCny = customer['debt_cny'] as num? ?? 0;
+            final debtUsd = customer['debt_usd'] as num? ?? 0;
+            final totalDebt = debtVnd + debtCny + debtUsd;
+            return totalDebt > 0;
+          })
+          .toList();
+
+      for (final customer in customersWithDebt) {
+        final customerId = customer['id']?.toString() ?? '';
+        if (customerId.isNotEmpty) {
+          final latestDate = await _getLatestOrderDate(customerId);
+          latestOrderDateCache[customerId] = latestDate;
+        }
+      }
+    } catch (e) {
+      developer.log('Error loading latest order dates: $e');
+    } finally {
+      setState(() {
+        isLoadingLatestDates = false;
+      });
+    }
+  }
+
   List<Map<String, dynamic>> get filteredCustomers {
     var filtered = searchText.isNotEmpty ? searchResults : customers;
 
@@ -210,6 +338,31 @@ class _CustomersScreenState extends State<CustomersScreen> {
         final debtA = (a['debt_vnd'] as num? ?? 0) + (a['debt_cny'] as num? ?? 0) + (a['debt_usd'] as num? ?? 0);
         final debtB = (b['debt_vnd'] as num? ?? 0) + (b['debt_cny'] as num? ?? 0) + (b['debt_usd'] as num? ?? 0);
         return debtA.compareTo(debtB);
+      });
+    } else if (sortOption == 'debt-oldest' || sortOption == 'debt-newest') {
+      filtered = filtered.where((customer) {
+        final debtVnd = customer['debt_vnd'] as num? ?? 0;
+        final debtCny = customer['debt_cny'] as num? ?? 0;
+        final debtUsd = customer['debt_usd'] as num? ?? 0;
+        final totalDebt = debtVnd + debtCny + debtUsd;
+        return totalDebt > 0;
+      }).toList();
+
+      filtered.sort((a, b) {
+        final customerIdA = a['id']?.toString() ?? '';
+        final customerIdB = b['id']?.toString() ?? '';
+        final dateA = latestOrderDateCache[customerIdA];
+        final dateB = latestOrderDateCache[customerIdB];
+
+        if (dateA == null && dateB == null) return 0;
+        if (dateA == null) return 1;
+        if (dateB == null) return -1;
+
+        if (sortOption == 'debt-oldest') {
+          return dateA.compareTo(dateB);
+        } else {
+          return dateB.compareTo(dateA);
+        }
       });
     }
 
@@ -350,11 +503,18 @@ class _CustomersScreenState extends State<CustomersScreen> {
                         DropdownMenuItem(value: 'name-desc', child: Text('Tên (Z-A)', overflow: TextOverflow.ellipsis)),
                         DropdownMenuItem(value: 'debt-asc', child: Text('Công nợ thấp đến cao', overflow: TextOverflow.ellipsis)),
                         DropdownMenuItem(value: 'debt-desc', child: Text('Công nợ cao đến thấp', overflow: TextOverflow.ellipsis)),
+                        DropdownMenuItem(value: 'debt-oldest', child: Text('Công nợ lâu nhất', overflow: TextOverflow.ellipsis)),
+                        DropdownMenuItem(value: 'debt-newest', child: Text('Công nợ mới nhất', overflow: TextOverflow.ellipsis)),
                       ],
-                      onChanged: (value) {
+                      onChanged: (value) async {
+                        final newSortOption = value ?? 'name-asc';
                         setState(() {
-                          sortOption = value ?? 'name-asc';
+                          sortOption = newSortOption;
                         });
+                        
+                        if (newSortOption == 'debt-oldest' || newSortOption == 'debt-newest') {
+                          await _loadLatestOrderDates();
+                        }
                       },
                     ),
                   ),
@@ -1057,13 +1217,25 @@ class _CustomerDetailsDialogState extends State<CustomerDetailsDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Tên: ${customer['name']?.toString() ?? ''}'),
+            CopyableText(
+              label: 'Tên',
+              value: customer['name']?.toString() ?? '',
+            ),
             const SizedBox(height: 8),
-            Text('Số điện thoại: ${customer['phone']?.toString() ?? ''}'),
+            CopyableText(
+              label: 'Số điện thoại',
+              value: customer['phone']?.toString() ?? '',
+            ),
             const SizedBox(height: 8),
-            Text('Link mạng xã hội: ${customer['social_link']?.toString() ?? ''}'),
+            CopyableText(
+              label: 'Link mạng xã hội',
+              value: customer['social_link']?.toString() ?? '',
+            ),
             const SizedBox(height: 8),
-            Text('Địa chỉ: ${customer['address']?.toString() ?? ''}'),
+            CopyableText(
+              label: 'Địa chỉ',
+              value: customer['address']?.toString() ?? '',
+            ),
             const SizedBox(height: 8),
             Text('Công nợ: $debtText'),
             const SizedBox(height: 16),

@@ -105,9 +105,29 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     try {
+      // Kiểm tra email và password không rỗng
+      final email = emailController.text.trim();
+      final password = passwordController.text.trim();
+      
+      if (email.isEmpty) {
+        setState(() {
+          errorText = 'Vui lòng nhập email';
+          isLoading = false;
+        });
+        return;
+      }
+      
+      if (password.isEmpty) {
+        setState(() {
+          errorText = 'Vui lòng nhập mật khẩu';
+          isLoading = false;
+        });
+        return;
+      }
+
       final response = await Supabase.instance.client.auth.signInWithPassword(
-        email: emailController.text.trim(),
-        password: passwordController.text.trim(),
+        email: email,
+        password: password,
       );
 
       if (response.user != null) {
@@ -135,16 +155,42 @@ class _LoginScreenState extends State<LoginScreen> {
         } else {
           setState(() {
             errorText = 'Không tìm thấy dự án phụ cho người dùng này';
+            isLoading = false;
           });
         }
       } else {
         setState(() {
           errorText = 'Sai email hoặc mật khẩu';
+          isLoading = false;
         });
       }
+    } on AuthException catch (e) {
+      // Xử lý lỗi xác thực từ Supabase
+      String errorMessage;
+      final statusCode = e.statusCode ?? '';
+      switch (statusCode) {
+        case 'invalid_credentials':
+          errorMessage = 'Email hoặc mật khẩu không đúng. Vui lòng kiểm tra lại.';
+          break;
+        case 'email_not_confirmed':
+          errorMessage = 'Email chưa được xác thực. Vui lòng kiểm tra hộp thư và xác thực email trước khi đăng nhập.';
+          break;
+        case 'too_many_requests':
+          errorMessage = 'Quá nhiều lần thử đăng nhập. Vui lòng thử lại sau vài phút.';
+          break;
+        default:
+          errorMessage = e.message.isNotEmpty ? e.message : 'Lỗi đăng nhập: $statusCode';
+      }
+      
+      setState(() {
+        errorText = errorMessage;
+        isLoading = false;
+      });
+      print('Login error: ${e.message} (${e.statusCode})');
     } catch (e) {
       setState(() {
-        errorText = 'Lỗi đăng nhập: $e';
+        errorText = 'Lỗi đăng nhập: ${e.toString()}';
+        isLoading = false;
       });
       print('Login error: $e');
     } finally {
@@ -165,11 +211,9 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     try {
-      // Sử dụng URL web của Supabase project làm redirect
-      // Supabase sẽ redirect về URL này với token trong query params
       await Supabase.instance.client.auth.resetPasswordForEmail(
         email.trim(),
-        redirectTo: 'https://ztmyzmkcwjiaathizgyy.supabase.co/auth/v1/callback',
+        redirectTo: 'io.supabase.flutterquickstart://reset-callback/',
       );
 
       if (!mounted) return;

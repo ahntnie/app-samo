@@ -82,7 +82,7 @@ class _SaleFormState extends State<SaleForm> {
   bool isLoading = true;
   String? errorMessage;
   String? imeiError;
-  double customerDebt = 0;
+  Map<String, num>? customerDebt; // Lưu công nợ: {'debt_vnd': ..., 'debt_cny': ..., 'debt_usd': ...}
 
   final TextEditingController imeiController = TextEditingController();
   final TextEditingController customerController = TextEditingController();
@@ -232,7 +232,7 @@ class _SaleFormState extends State<SaleForm> {
   Future<void> _fetchCustomerDebt() async {
     if (customerId == null) {
       setState(() {
-        customerDebt = 0;
+        customerDebt = null;
       });
       return;
     }
@@ -241,17 +241,20 @@ class _SaleFormState extends State<SaleForm> {
       final supabase = widget.tenantClient;
       final response = await supabase
           .from('customers')
-          .select('debt_vnd')
+          .select('debt_vnd, debt_cny, debt_usd')
           .eq('id', customerId!)
           .single();
 
-      final debt = double.tryParse(response['debt_vnd'].toString()) ?? 0;
       setState(() {
-        customerDebt = debt < 0 ? -debt : 0;
+        customerDebt = {
+          'debt_vnd': (response['debt_vnd'] as num?) ?? 0,
+          'debt_cny': (response['debt_cny'] as num?) ?? 0,
+          'debt_usd': (response['debt_usd'] as num?) ?? 0,
+        };
       });
     } catch (e) {
       setState(() {
-        customerDebt = 0;
+        customerDebt = null;
       });
     }
   }
@@ -1120,7 +1123,7 @@ class _SaleFormState extends State<SaleForm> {
                               if (value.isEmpty) {
                                 customerId = null;
                                 customerName = null;
-                                customerDebt = 0;
+                                customerDebt = null;
                               }
                             });
                           },
@@ -1150,14 +1153,36 @@ class _SaleFormState extends State<SaleForm> {
                 ),
               ],
             ),
-            if (customerDebt > 0)
-              Padding(
-                padding: const EdgeInsets.only(top: 4),
-                child: Text(
-                  'Khách hàng đang dư ${formatNumberLocal(customerDebt)} VND',
-                  style: const TextStyle(color: Colors.red),
-                ),
+            if (customerDebt != null) ...[
+              Builder(
+                builder: (context) {
+                  final debtVnd = customerDebt!['debt_vnd'] ?? 0;
+                  final debtCny = customerDebt!['debt_cny'] ?? 0;
+                  final debtUsd = customerDebt!['debt_usd'] ?? 0;
+                  
+                  final debtDetails = <String>[];
+                  if (debtVnd != 0) debtDetails.add('${formatNumberLocal(debtVnd.abs())} VND');
+                  if (debtCny != 0) debtDetails.add('${formatNumberLocal(debtCny.abs())} CNY');
+                  if (debtUsd != 0) debtDetails.add('${formatNumberLocal(debtUsd.abs())} USD');
+                  
+                  if (debtDetails.isEmpty) {
+                    return const SizedBox.shrink();
+                  }
+                  
+                  final debtText = debtDetails.join(', ');
+                  final isPositive = debtVnd > 0 || debtCny > 0 || debtUsd > 0;
+                  final message = isPositive ? 'Khách còn nợ $debtText' : 'Mình nợ khách $debtText';
+                  
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      message,
+                      style: TextStyle(color: isPositive ? Colors.red : Colors.blue),
+                    ),
+                  );
+                },
               ),
+            ],
             wrapField(
               Autocomplete<String>(
                 optionsBuilder: (TextEditingValue textEditingValue) {

@@ -97,6 +97,7 @@ class _ImportFormState extends State<ImportForm> {
   String? imeiError;
   bool isProcessing = false;
   final Set<String> confirmedImeis = {};
+  Map<String, num>? supplierDebt; // Lưu công nợ: {'debt_vnd': ..., 'debt_cny': ..., 'debt_usd': ...}
 
   List<Map<String, dynamic>> categories = [];
   List<Map<String, dynamic>> suppliers = [];
@@ -287,6 +288,39 @@ class _ImportFormState extends State<ImportForm> {
       accountNames = filteredAccounts;
       account = null;
     });
+  }
+
+  Future<void> _fetchSupplierDebt() async {
+    if (supplierId == null) {
+      setState(() {
+        supplierDebt = null;
+      });
+      return;
+    }
+
+    try {
+      final supabase = widget.tenantClient;
+      final response = await retry(
+            () => supabase
+            .from('suppliers')
+            .select('debt_vnd, debt_cny, debt_usd')
+            .eq('id', supplierId!)
+            .single(),
+        operation: 'Fetch supplier debt',
+      );
+
+      setState(() {
+        supplierDebt = {
+          'debt_vnd': (response['debt_vnd'] as num?) ?? 0,
+          'debt_cny': (response['debt_cny'] as num?) ?? 0,
+          'debt_usd': (response['debt_usd'] as num?) ?? 0,
+        };
+      });
+    } catch (e) {
+      setState(() {
+        supplierDebt = null;
+      });
+    }
   }
 
   Future<num> _getExchangeRate(String currency) async {
@@ -1576,12 +1610,13 @@ class _ImportFormState extends State<ImportForm> {
                             }
                             return name;
                           },
-                          onSelected: (val) {
+                          onSelected: (val) async {
                             if (val['id'].isNotEmpty) {
                               setState(() {
                                 supplier = val['name'] as String;
                                 supplierId = val['id'] as String;
                               });
+                              await _fetchSupplierDebt();
                             }
                           },
                           fieldViewBuilder: (context, controller, focusNode, onSubmit) {
@@ -1591,7 +1626,10 @@ class _ImportFormState extends State<ImportForm> {
                               focusNode: focusNode,
                               onChanged: (val) => setState(() {
                                 supplier = val.isNotEmpty ? val : null;
-                                if (val.isEmpty) supplierId = null;
+                                if (val.isEmpty) {
+                                  supplierId = null;
+                                  supplierDebt = null;
+                                }
                               }),
                               decoration: const InputDecoration(
                                 labelText: 'Nhà cung cấp',
@@ -1609,6 +1647,36 @@ class _ImportFormState extends State<ImportForm> {
                     ),
                   ],
                 ),
+                if (supplierDebt != null) ...[
+                  Builder(
+                    builder: (context) {
+                      final debtVnd = supplierDebt!['debt_vnd'] ?? 0;
+                      final debtCny = supplierDebt!['debt_cny'] ?? 0;
+                      final debtUsd = supplierDebt!['debt_usd'] ?? 0;
+                      
+                      final debtDetails = <String>[];
+                      if (debtVnd != 0) debtDetails.add('${formatNumberLocal(debtVnd.abs())} VND');
+                      if (debtCny != 0) debtDetails.add('${formatNumberLocal(debtCny.abs())} CNY');
+                      if (debtUsd != 0) debtDetails.add('${formatNumberLocal(debtUsd.abs())} USD');
+                      
+                      if (debtDetails.isEmpty) {
+                        return const SizedBox.shrink();
+                      }
+                      
+                      final debtText = debtDetails.join(', ');
+                      final isPositive = debtVnd > 0 || debtCny > 0 || debtUsd > 0;
+                      final message = isPositive ? 'Mình còn nợ $debtText' : 'Ncc nợ mình $debtText';
+                      
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Text(
+                          message,
+                          style: TextStyle(color: isPositive ? Colors.red : Colors.blue),
+                        ),
+                      );
+                    },
+                  ),
+                ],
                 Row(
                   children: [
                     Expanded(

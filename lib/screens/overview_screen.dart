@@ -4,6 +4,7 @@ import 'package:fl_chart/fl_chart.dart';
 import 'dart:math';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../helpers/global_cache_manager.dart';
+import 'package:shared_preferences/shared_preferences.dart'; // added for persistence
 
 // Backward compatibility alias
 class CacheUtil {
@@ -77,29 +78,102 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
 
   List<String> filters = ['Hôm nay', '7 ngày qua', '30 ngày qua', 'Tùy chọn'];
 
+  // --- new state for ordering and persistence ---
+  List<String> businessOrder = [];
+  List<String> financeOrder = [];
+  static const String _prefsBusinessKey = 'overview_business_order';
+  static const String _prefsFinanceKey = 'overview_finance_order';
+
+  final List<String> _businessDefaultOrder = [
+    'company_value',
+    'employee_commission',
+    'sales',
+    'profit',
+    'cost',
+    'profit_after_cost',
+    'chart_business',
+  ];
+
+  final List<String> _financeDefaultOrder = [
+    // accounts will be inserted dynamically as 'account:<id>'
+    'accounts_section', // placeholder to keep accounts grouped
+    'supplier_debt',
+    'customer_debt',
+    'fixer_debt',
+    'transporter_debt',
+    'inventory_cost',
+    'total_income',
+    'total_expense',
+    'chart_finance',
+  ];
+  // --- end new state ---
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: widget.permissions.contains('view_finance') ? 3 : 2, vsync: this);
-    _initCaches().then((_) => fetchAllData());
+    _initCaches().then((_) async {
+      await _loadSavedOrders();
+      fetchAllData();
+    });
   }
 
+  // Thêm hàm khởi tạo cache nếu chưa có — sửa lỗi line đỏ khi gọi _initCaches()
   Future<void> _initCaches() async {
     try {
-      // Sử dụng GlobalCacheManager - tự động skip nếu đã có cache
-      final cacheManager = GlobalCacheManager();
-      await cacheManager.fetchAndCacheProducts(widget.tenantClient);
-      await cacheManager.fetchAndCacheWarehouses(widget.tenantClient);
-
-      // Build warehouse options từ cache
-      List<String> warehouseNames = ['Tất cả chi nhánh'];
-      warehouseNames.addAll(cacheManager.warehouseNameCache.values);
-      
+      // Nếu GlobalCacheManager đã có dữ liệu, lấy danh sách tên kho để hiển thị
+      final warehouseMap = CacheUtil.warehouseNameCache;
+      final names = warehouseMap.values.toList();
       setState(() {
-        _warehouseOptions = warehouseNames;
+        _warehouseOptions = ['Tất cả chi nhánh', ...names];
+        // đảm bảo _selectedWarehouse hợp lệ
+        if (_selectedWarehouse == null || !_warehouseOptions.contains(_selectedWarehouse)) {
+          _selectedWarehouse = 'Tất cả chi nhánh';
+        }
       });
     } catch (e) {
-      print('Error initializing caches: $e');
+      // Không để lỗi làm crash UI
+      setState(() {
+        _warehouseOptions = ['Tất cả chi nhánh'];
+        _selectedWarehouse = 'Tất cả chi nhánh';
+      });
+    }
+  }
+
+  Future<void> _loadSavedOrders() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedBusiness = prefs.getStringList(_prefsBusinessKey);
+      final savedFinance = prefs.getStringList(_prefsFinanceKey);
+
+      setState(() {
+        businessOrder = savedBusiness != null && savedBusiness.isNotEmpty ? savedBusiness : List.from(_businessDefaultOrder);
+        financeOrder = savedFinance != null && savedFinance.isNotEmpty ? savedFinance : List.from(_financeDefaultOrder);
+      });
+    } catch (e) {
+      print('Error loading saved orders: $e');
+      setState(() {
+        businessOrder = List.from(_businessDefaultOrder);
+        financeOrder = List.from(_financeDefaultOrder);
+      });
+    }
+  }
+
+  Future<void> _saveBusinessOrder() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(_prefsBusinessKey, businessOrder);
+    } catch (e) {
+      print('Error saving business order: $e');
+    }
+  }
+
+  Future<void> _saveFinanceOrder() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(_prefsFinanceKey, financeOrder);
+    } catch (e) {
+      print('Error saving finance order: $e');
     }
   }
 
@@ -352,6 +426,9 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
         accounts = List<Map<String, dynamic>>.from(acc);
       });
 
+      // Ensure financeOrder includes account ids if needed
+      _ensureFinanceOrderIncludesAccounts();
+
       double totalAccountBalance = 0;
       for (final account in accounts) {
         final balanceRaw = account['balance'];
@@ -598,6 +675,56 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
         companyValue = 0;
       });
     }
+  }
+
+  // Ensure financeOrder contains account:<id> entries for existing accounts
+  void _ensureFinanceOrderIncludesAccounts() {
+    final accountIds = accounts.map((a) => 'account:${a['id'] ?? a['name'] ?? accounts.indexOf(a)}').toList();
+    // If financeOrder is empty (not loaded), set defaults
+    if (financeOrder.isEmpty) financeOrder = List.from(_financeDefaultOrder);
+    // Replace placeholder 'accounts_section' with actual accounts if present in order
+    if (!financeOrder.contains('accounts_section')) {
+      // if saved order has explicit accounts, keep them; otherwise insert placeholder
+      financeOrder.insert(0, 'accounts_section');
+    }
+    // Build new list: start with saved financeOrder except we will expand accounts_section into actual accounts
+    List<String> expanded = [];
+    for (final id in financeOrder) {
+      if (id == 'accounts_section') {
+        // append accounts preserving any saved account order that matches
+        // find saved account ids in financeOrder (those starting with 'account:')
+        final savedAccounts = financeOrder.where((x) => x.startsWith('account:')).toList();
+        if (savedAccounts.isNotEmpty) {
+          // keep saved existing ones first
+          for (final sa in savedAccounts) {
+            if (accountIds.contains(sa)) expanded.add(sa);
+          }
+          // then add any missing accounts
+          for (final aid in accountIds) {
+            if (!expanded.contains(aid)) expanded.add(aid);
+          }
+        } else {
+          expanded.addAll(accountIds);
+        }
+      } else if (id.startsWith('account:')) {
+        // skip here because handled in accounts_section expansion
+        continue;
+      } else {
+        expanded.add(id);
+      }
+    }
+    // Remove duplicates while preserving order
+    final seen = <String>{};
+    final deduped = <String>[];
+    for (final e in expanded) {
+      if (!seen.contains(e)) {
+        seen.add(e);
+        deduped.add(e);
+      }
+    }
+    financeOrder = deduped;
+    // Finally save to prefs
+    _saveFinanceOrder();
   }
 
   Future<void> fetchProductDistribution(String? status) async {
@@ -921,10 +1048,80 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
     );
   }
 
+  // Helper to build a business tile by id (used for reorderable list)
+  Widget _businessTileForId(String id) {
+    switch (id) {
+      case 'company_value':
+        if (!widget.permissions.contains('view_company_value')) return const SizedBox.shrink();
+        return _buildHeaderTile('Giá trị công ty', '${formatMoney(companyValue)} VND', Colors.purple);
+      case 'employee_commission':
+        if (!widget.permissions.contains('view_company_value')) return const SizedBox.shrink();
+        return _buildHeaderTile('Hoa hồng nhân viên', '${formatMoney(totalEmployeeCommission)} VND', Colors.teal);
+      case 'sales':
+        return _buildHeaderTile('Doanh số', '$soldProductsCount sp / ${formatMoney(revenue)} VND', Colors.green);
+      case 'profit':
+        if (!widget.permissions.contains('view_profit')) return const SizedBox.shrink();
+        return _buildHeaderTile('Lợi nhuận', '${formatMoney(profit)} VND', Colors.orange);
+      case 'cost':
+        if (!widget.permissions.contains('view_profit')) return const SizedBox.shrink();
+        return _buildHeaderTile('Chi phí', '${formatMoney(totalCost)} VND', Colors.red);
+      case 'profit_after_cost':
+        if (!widget.permissions.contains('view_profit')) return const SizedBox.shrink();
+        return _buildHeaderTile('Lợi nhuận sau chi phí', '${formatMoney(profitAfterCost)} VND', profitAfterCost >= 0 ? Colors.blue : Colors.red);
+      case 'chart_business':
+        return _buildLineChart('Doanh số và lợi nhuận theo thời gian', revenueSpots, Colors.green, spots2: profitSpots, color2: Colors.orange);
+      default:
+        return const SizedBox.shrink();
+    }
+  }
+
+  // Helper to build a finance tile by id (used for reorderable list)
+  Widget _financeTileForId(String id) {
+    if (id.startsWith('account:')) {
+      final accId = id.split(':').elementAt(1);
+      final acc = accounts.firstWhere((a) => (a['id']?.toString() ?? a['name']?.toString() ?? '') == accId, orElse: () => {});
+      if (acc.isEmpty) return const SizedBox.shrink();
+      final currency = acc['currency']?.toString() ?? 'VND';
+      final balance = (acc['balance'] is String ? num.tryParse(acc['balance'])?.toDouble() : (acc['balance'] as num?)?.toDouble()) ?? 0.0;
+      return _buildHeaderTile(
+        acc['name'] ?? 'Tài khoản',
+        '${formatMoney(balance, currency: currency)} $currency',
+        Colors.blue,
+      );
+    }
+    switch (id) {
+      case 'supplier_debt':
+        return _buildHeaderTile('Công nợ nhà cung cấp', '${formatMoney(totalSupplierDebt)} VND', Colors.orange);
+      case 'customer_debt':
+        return _buildHeaderTile('Công nợ khách hàng', '${formatMoney(totalCustomerDebt)} VND', Colors.orange);
+      case 'fixer_debt':
+        return _buildHeaderTile('Công nợ đơn vị fix lỗi', '${formatMoney(totalFixerDebt)} VND', Colors.orange);
+      case 'transporter_debt':
+        return _buildHeaderTile('Công nợ đơn vị vận chuyển', '${formatMoney(totalTransporterDebt)} VND', Colors.orange);
+      case 'inventory_cost':
+        return _buildHeaderTile('Tổng tiền hàng tồn', '${formatMoney(totalInventoryCost)} VND', Colors.purple);
+      case 'total_income':
+        return _buildHeaderTile('Tổng thu', '${formatMoney(totalIncome)} VND', Colors.green);
+      case 'total_expense':
+        return _buildHeaderTile('Tổng chi', '${formatMoney(totalExpense)} VND', Colors.red);
+      case 'chart_finance':
+        return _buildLineChart('Tổng thu và chi theo thời gian', incomeSpots, Colors.green, spots2: expenseSpots, color2: Colors.red);
+      default:
+        return const SizedBox.shrink();
+    }
+  }
+
   Widget _buildBusinessTab() {
+    // Filter businessOrder to available ids given permissions
+    final visibleIds = businessOrder.where((id) {
+      if (id == 'company_value' || id == 'employee_commission') return widget.permissions.contains('view_company_value');
+      if (id == 'profit' || id == 'cost' || id == 'profit_after_cost') return widget.permissions.contains('view_profit');
+      return true;
+    }).toList();
+
     return RefreshIndicator(
       onRefresh: fetchAllData,
-      child: ListView(
+      child: Column(
         children: [
           _buildTimeFilter(),
           Padding(
@@ -956,46 +1153,84 @@ class _OverviewScreenState extends State<OverviewScreen> with SingleTickerProvid
               ),
             ),
           ),
-          if (widget.permissions.contains('view_company_value'))
-            _buildHeaderTile('Giá trị công ty', '${formatMoney(companyValue)} VND', Colors.purple),
-          if (widget.permissions.contains('view_company_value'))
-            _buildHeaderTile('Hoa hồng nhân viên', '${formatMoney(totalEmployeeCommission)} VND', Colors.teal),
-          _buildHeaderTile('Doanh số', '$soldProductsCount sp / ${formatMoney(revenue)} VND', Colors.green),
-          if (widget.permissions.contains('view_profit'))
-            _buildHeaderTile('Lợi nhuận', '${formatMoney(profit)} VND', Colors.orange),
-          if (widget.permissions.contains('view_profit'))
-            _buildHeaderTile('Chi phí', '${formatMoney(totalCost)} VND', Colors.red),
-          if (widget.permissions.contains('view_profit'))
-            _buildHeaderTile('Lợi nhuận sau chi phí', '${formatMoney(profitAfterCost)} VND', profitAfterCost >= 0 ? Colors.blue : Colors.red),
-          _buildLineChart('Doanh số và lợi nhuận theo thời gian', revenueSpots, Colors.green, spots2: profitSpots, color2: Colors.orange),
+          Expanded(
+            child: ReorderableListView.builder(
+              padding: const EdgeInsets.only(bottom: 16),
+              onReorder: (oldIndex, newIndex) async {
+                // Map visible index to businessOrder index
+                final movedId = visibleIds[oldIndex];
+                final targetId = (newIndex > oldIndex) ? visibleIds[newIndex - 1] : (newIndex < visibleIds.length ? visibleIds[newIndex] : null);
+                // Update businessOrder by removing movedId and inserting before targetId (or at end)
+                setState(() {
+                  businessOrder.remove(movedId);
+                  if (targetId == null) {
+                    businessOrder.add(movedId);
+                  } else {
+                    final insertIdx = businessOrder.indexOf(targetId);
+                    businessOrder.insert(insertIdx, movedId);
+                  }
+                });
+                await _saveBusinessOrder();
+              },
+              itemCount: visibleIds.length,
+              itemBuilder: (context, index) {
+                final id = visibleIds[index];
+                final tile = _businessTileForId(id);
+                return Container(
+                  key: ValueKey(id),
+                  child: tile,
+                );
+              },
+            ),
+          ),
         ],
       ),
     );
   }
 
   Widget _buildFinanceTab() {
+    // Build visible finance ids based on current accounts and permissions
+    final visibleIds = financeOrder.where((id) {
+      if (id.startsWith('account:')) {
+        final accId = id.split(':').elementAt(1);
+        return accounts.any((a) => (a['id']?.toString() ?? a['name']?.toString() ?? '') == accId);
+      }
+      // non-account tiles always visible (some may be guarded by permissions in original code; keep same visibility)
+      return true;
+    }).toList();
+
     return RefreshIndicator(
       onRefresh: fetchAllData,
-      child: ListView(
+      child: Column(
         children: [
-          _buildTimeFilter(),
-          ...accounts.map((e) {
-            final currency = e['currency']?.toString() ?? 'VND';
-            final balance = (e['balance'] is String ? num.tryParse(e['balance'])?.toDouble() : (e['balance'] as num?)?.toDouble()) ?? 0.0;
-            return _buildHeaderTile(
-              e['name'],
-              '${formatMoney(balance, currency: currency)} $currency',
-              Colors.blue,
-            );
-          }),
-          _buildHeaderTile('Công nợ nhà cung cấp', '${formatMoney(totalSupplierDebt)} VND', Colors.orange),
-          _buildHeaderTile('Công nợ khách hàng', '${formatMoney(totalCustomerDebt)} VND', Colors.orange),
-          _buildHeaderTile('Công nợ đơn vị fix lỗi', '${formatMoney(totalFixerDebt)} VND', Colors.orange),
-          _buildHeaderTile('Công nợ đơn vị vận chuyển', '${formatMoney(totalTransporterDebt)} VND', Colors.orange),
-          _buildHeaderTile('Tổng tiền hàng tồn', '${formatMoney(totalInventoryCost)} VND', Colors.orange),
-          _buildHeaderTile('Tổng thu', '${formatMoney(totalIncome)} VND', Colors.green),
-          _buildHeaderTile('Tổng chi', '${formatMoney(totalExpense)} VND', Colors.red),
-          _buildLineChart('Tổng thu và chi theo thời gian', incomeSpots, Colors.green, spots2: expenseSpots, color2: Colors.red),
+          Expanded(
+            child: ReorderableListView.builder(
+              padding: const EdgeInsets.only(bottom: 16),
+              onReorder: (oldIndex, newIndex) async {
+                final movedId = visibleIds[oldIndex];
+                setState(() {
+                  financeOrder.remove(movedId);
+                  if (newIndex >= visibleIds.length) {
+                    financeOrder.add(movedId);
+                  } else {
+                    final targetId = visibleIds[newIndex];
+                    final insertIdx = financeOrder.indexOf(targetId);
+                    financeOrder.insert(insertIdx, movedId);
+                  }
+                });
+                await _saveFinanceOrder();
+              },
+              itemCount: visibleIds.length,
+              itemBuilder: (context, index) {
+                final id = visibleIds[index];
+                final tile = _financeTileForId(id);
+                return Container(
+                  key: ValueKey(id),
+                  child: tile,
+                );
+              },
+            ),
+          ),
         ],
       ),
     );

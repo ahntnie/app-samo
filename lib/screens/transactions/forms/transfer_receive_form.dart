@@ -1445,8 +1445,11 @@ class _TransferReceiveFormState extends State<TransferReceiveForm> {
                       optionsBuilder: (TextEditingValue textEditingValue) {
                         final query = textEditingValue.text.toLowerCase();
                         if (productId == null) return ['Vui lòng chọn sản phẩm'];
-                        if (query.isEmpty) return imeiSuggestions.take(10).toList();
-                        final filtered = imeiSuggestions
+                        final availableSuggestions = imeiSuggestions
+                            .where((option) => !imeiList.contains(option))
+                            .toList();
+                        if (query.isEmpty) return availableSuggestions.take(10).toList();
+                        final filtered = availableSuggestions
                             .where((option) => option.toLowerCase().contains(query))
                             .toList()
                           ..sort((a, b) {

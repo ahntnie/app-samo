@@ -369,6 +369,13 @@ class _InventoryScreenState extends State<InventoryScreen> {
       if (item['product_id'] == null || item['imei'] == null) {
         return false;
       }
+      // ✅ Loại bỏ sản phẩm "Đã bán" và "Đã trả ncc" khi lọc "Tồn kho mới nhất" hoặc "Tồn kho lâu nhất"
+      if (selectedFilter == 'Tồn kho mới nhất' || selectedFilter == 'Tồn kho lâu nhất') {
+        final status = item['status']?.toString() ?? '';
+        if (status == 'Đã bán' || status == 'Đã trả ncc') {
+          return false;
+        }
+      }
       return true;
     }).toList();
 
