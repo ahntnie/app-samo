@@ -301,8 +301,31 @@ class _ExcelReportScreenState extends State<ExcelReportScreen> {
             );
             final value = rowValues[colIndex];
             final headerLabel = headerLabels[colIndex];
+            final columnName = dataColumns[colIndex];
             final isMultiline = multilineHeaders.contains(headerLabel);
-            cell.value = TextCellValue(value);
+            
+            // Xác định loại cell value dựa trên loại cột
+            if (integerColumnsForExport.contains(columnName)) {
+              // Cột số nguyên
+              if (value.isNotEmpty) {
+                final intValue = int.tryParse(value);
+                cell.value = intValue != null ? IntCellValue(intValue) : TextCellValue(value);
+              } else {
+                cell.value = TextCellValue('');
+              }
+            } else if (numericColumns.contains(columnName)) {
+              // Cột số thực
+              if (value.isNotEmpty) {
+                final doubleValue = double.tryParse(value);
+                cell.value = doubleValue != null ? DoubleCellValue(doubleValue) : TextCellValue(value);
+              } else {
+                cell.value = TextCellValue('');
+              }
+            } else {
+              // Cột text
+              cell.value = TextCellValue(value);
+            }
+            
             cell.cellStyle = isMultiline ? styles.multiline : styles.centered;
             sizingTracker.update(currentRowIndex, colIndex, value);
           }

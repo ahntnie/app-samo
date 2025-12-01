@@ -770,13 +770,11 @@ class _FixerDetailsDialogState extends State<FixerDetailsDialog> {
         final rawAmount = transaction['price'] ?? transaction['amount'] ?? 0;
         final amount = rawAmount is String ? num.tryParse(rawAmount) ?? 0 : (rawAmount as num?) ?? 0;
         final currency = transaction['currency']?.toString() ?? 'VND';
-        final formattedAmount = formatNumber(amount);
         final productId = transaction['product_id']?.toString() ?? '';
         final productName = CacheUtil.getProductName(productId);
         final imeiStr = transaction['imei']?.toString() ?? '';
         final imeiList = imeiStr.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
         final hasMultipleImeis = imeiList.length > 1;
-        final quantityStr = transaction['quantity']?.toString() ?? '';
         final warehouseId = transaction['warehouse_id']?.toString() ?? '';
         final warehouseName = CacheUtil.getWarehouseName(warehouseId);
         final account = transaction['account']?.toString() ?? '';
@@ -791,7 +789,7 @@ class _FixerDetailsDialogState extends State<FixerDetailsDialog> {
               productName,
               singleImei,
               '1',
-              formattedAmount,
+              amount.toString(),
               currency,
               warehouseName,
               account,
@@ -807,20 +805,39 @@ class _FixerDetailsDialogState extends State<FixerDetailsDialog> {
               final header = headerLabels[columnIndex];
               final value = rowValues[columnIndex];
               final isMultiline = multilineColumns.contains(header);
-              cell.value = TextCellValue(value);
+              
+              // Xác định loại cell value dựa trên header
+              if (header == 'Số lượng') {
+                // Cột số lượng - số nguyên
+                final intValue = int.tryParse(value);
+                cell.value = intValue != null ? IntCellValue(intValue) : TextCellValue(value);
+              } else if (header == 'Số tiền') {
+                // Cột số tiền - số thực
+                if (value.isNotEmpty && value != '') {
+                  final doubleValue = double.tryParse(value);
+                  cell.value = doubleValue != null ? DoubleCellValue(doubleValue) : TextCellValue(value);
+                } else {
+                  cell.value = TextCellValue('');
+                }
+              } else {
+                // Cột text
+                cell.value = TextCellValue(value);
+              }
+              
               cell.cellStyle = isMultiline ? styles.multiline : styles.centered;
               sizingTracker.update(currentRow - 1, columnIndex, value);
             }
             currentRow++;
           }
         } else {
+          final quantityNum = transaction['quantity'] as num? ?? 0;
           final rowValues = [
             type,
             createdAt,
             productName,
             imeiStr,
-            quantityStr,
-            formattedAmount,
+            quantityNum.toString(),
+            amount.toString(),
             currency,
             warehouseName,
             account,
@@ -836,7 +853,25 @@ class _FixerDetailsDialogState extends State<FixerDetailsDialog> {
             final header = headerLabels[columnIndex];
             final value = rowValues[columnIndex];
             final isMultiline = multilineColumns.contains(header);
-            cell.value = TextCellValue(value);
+            
+            // Xác định loại cell value dựa trên header
+            if (header == 'Số lượng') {
+              // Cột số lượng - số nguyên
+              final intValue = int.tryParse(value);
+              cell.value = intValue != null ? IntCellValue(intValue) : TextCellValue(value);
+            } else if (header == 'Số tiền') {
+              // Cột số tiền - số thực
+              if (value.isNotEmpty && value != '') {
+                final doubleValue = double.tryParse(value);
+                cell.value = doubleValue != null ? DoubleCellValue(doubleValue) : TextCellValue(value);
+              } else {
+                cell.value = TextCellValue('');
+              }
+            } else {
+              // Cột text
+              cell.value = TextCellValue(value);
+            }
+            
             cell.cellStyle = isMultiline ? styles.multiline : styles.centered;
             sizingTracker.update(currentRow - 1, columnIndex, value);
           }

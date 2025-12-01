@@ -765,24 +765,19 @@ class _TransporterDetailsDialogState extends State<TransporterDetailsDialog> {
           // Với financial_orders (không có IMEI), dùng totalAmount
           amountPerImei = totalAmount;
         }
-        final formattedAmountPerImei = formatNumber(amountPerImei);
-        final formattedAmount = formatNumber(totalAmount);
-        
         // Tính tiền cọc và tiền COD cho mỗi IMEI (chia đều như số tiền)
-        String formattedCustomerPrice = '';
-        String formattedTransporterPrice = '';
+        num customerPricePerImei = 0;
+        num transporterPricePerImei = 0;
+        num customerPriceTotalValue = 0;
+        num transporterPriceTotalValue = 0;
         if ((isShipCod || isCodHoan) && customerPriceTotal != null && transporterPriceTotal != null) {
+          customerPriceTotalValue = customerPriceTotal;
+          transporterPriceTotalValue = transporterPriceTotal;
           if (hasImei && imeiList.isNotEmpty) {
             // Chia đều cho số lượng IMEI
             final imeiCount = imeiList.length;
-            final customerPricePerImei = customerPriceTotal / imeiCount;
-            final transporterPricePerImei = transporterPriceTotal / imeiCount;
-            formattedCustomerPrice = formatNumber(customerPricePerImei);
-            formattedTransporterPrice = formatNumber(transporterPricePerImei);
-          } else {
-            // Không có IMEI, dùng tổng
-            formattedCustomerPrice = formatNumber(customerPriceTotal);
-            formattedTransporterPrice = formatNumber(transporterPriceTotal);
+            customerPricePerImei = customerPriceTotal / imeiCount;
+            transporterPricePerImei = transporterPriceTotal / imeiCount;
           }
         }
 
@@ -794,10 +789,10 @@ class _TransporterDetailsDialogState extends State<TransporterDetailsDialog> {
               createdAt,
               productName,
               singleImei,
-              formattedAmountPerImei,
+              amountPerImei.toString(),
               currency,
-              formattedCustomerPrice,
-              formattedTransporterPrice,
+              customerPricePerImei > 0 ? customerPricePerImei.toString() : '',
+              transporterPricePerImei > 0 ? transporterPricePerImei.toString() : '',
             ];
 
             for (int columnIndex = 0; columnIndex < columnCount; columnIndex++) {
@@ -807,9 +802,24 @@ class _TransporterDetailsDialogState extends State<TransporterDetailsDialog> {
                   rowIndex: currentRow - 1,
                 ),
               );
+              final header = headers[columnIndex];
               final value = rowValues[columnIndex];
               final isMultiline = columnIndex == 3;
-              cell.value = TextCellValue(value);
+              
+              // Xác định loại cell value dựa trên header
+              if (header == 'Số tiền' || header == 'Tiền cọc' || header == 'Tiền COD') {
+                // Cột số tiền - số thực
+                if (value.isNotEmpty && value != '') {
+                  final doubleValue = double.tryParse(value);
+                  cell.value = doubleValue != null ? DoubleCellValue(doubleValue) : TextCellValue(value);
+                } else {
+                  cell.value = TextCellValue('');
+                }
+              } else {
+                // Cột text
+                cell.value = TextCellValue(value);
+              }
+              
               cell.cellStyle = isMultiline ? styles.multiline : styles.centered;
               sizingTracker.update(currentRow - 1, columnIndex, value);
             }
@@ -822,10 +832,10 @@ class _TransporterDetailsDialogState extends State<TransporterDetailsDialog> {
             createdAt,
             productName != 'Không xác định' ? productName : '',
             '',
-            formattedAmount,
+            totalAmount.toString(),
             currency,
-            formattedCustomerPrice,
-            formattedTransporterPrice,
+            customerPriceTotalValue > 0 ? customerPriceTotalValue.toString() : '',
+            transporterPriceTotalValue > 0 ? transporterPriceTotalValue.toString() : '',
           ];
 
           for (int columnIndex = 0; columnIndex < columnCount; columnIndex++) {
@@ -835,9 +845,24 @@ class _TransporterDetailsDialogState extends State<TransporterDetailsDialog> {
                 rowIndex: currentRow - 1,
               ),
             );
+            final header = headers[columnIndex];
             final value = rowValues[columnIndex];
             final isMultiline = columnIndex == 3;
-            cell.value = TextCellValue(value);
+            
+            // Xác định loại cell value dựa trên header
+            if (header == 'Số tiền' || header == 'Tiền cọc' || header == 'Tiền COD') {
+              // Cột số tiền - số thực
+              if (value.isNotEmpty && value != '') {
+                final doubleValue = double.tryParse(value);
+                cell.value = doubleValue != null ? DoubleCellValue(doubleValue) : TextCellValue(value);
+              } else {
+                cell.value = TextCellValue('');
+              }
+            } else {
+              // Cột text
+              cell.value = TextCellValue(value);
+            }
+            
             cell.cellStyle = isMultiline ? styles.multiline : styles.centered;
             sizingTracker.update(currentRow - 1, columnIndex, value);
           }

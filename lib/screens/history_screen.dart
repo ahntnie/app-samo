@@ -2005,6 +2005,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         'Số Tiền',
         'Đơn Vị Tiền',
         'Số Lượng',
+        'Thành tiền',
         'Ngày',
         'Tài Khoản',
         'Tiền cọc',
@@ -2067,7 +2068,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       }
 
       int dataRowIndex = 2; // Bắt đầu từ row 2 (sau header row)
-      const multilineColumns = {4, 15}; // IMEI (4) và Ghi chú (15)
+      const multilineColumns = {4, 16}; // IMEI (4) và Ghi chú (16)
       for (var ticket in exportTickets) {
         final tableName = ticket['table'] as String;
         final account = ticket['items'] is List && (ticket['items'] as List).isNotEmpty 
@@ -2085,9 +2086,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
           final imei = item['imei']?.toString() ?? 'N/A';
           final amount = item['amount'] ?? item['total_amount'] ?? 0;
           final currency = item['currency']?.toString() ?? 'VND';
-          final quantity = tableName == 'transporter_orders' 
-              ? (item['imei'] != null ? (item['imei'] as String).split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).length.toString() : '0')
-              : _formatNumber(item['quantity'] ?? 0);
           // Hiển thị tài khoản cho financial_orders (payment, receive, cost, income_other) nhưng không hiển thị cho exchange và transfer_fund (vì có to_account riêng)
           // Và hiển thị cho non-financial tickets nhưng không hiển thị nếu là Ship COD hoặc Cod hoàn (vì thừa)
           final account = (item['account'] != null && 
@@ -2100,21 +2098,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
           // Tiền cọc và tiền COD hiển thị cho sale_orders với account == 'Ship COD' hoặc reimport_orders với account == 'Cod hoàn'
           final isShipCodItem = tableName == 'sale_orders' && item['account']?.toString() == 'Ship COD';
           final isCodHoanItem = tableName == 'reimport_orders' && item['account']?.toString() == 'Cod hoàn';
-          final customerPrice = ((isShipCodItem || isCodHoanItem) && item['customer_price'] != null)
-              ? _formatNumber(item['customer_price'])
-              : '';
-          final transporterPrice = ((isShipCodItem || isCodHoanItem) && item['transporter_price'] != null)
-              ? _formatNumber(item['transporter_price'])
-              : '';
           final transporterName = ((isShipCodItem || isCodHoanItem) && 
               item['transporter'] != null && 
               item['transporter'].toString().isNotEmpty)
               ? item['transporter'].toString()
               : '';
           final saleman = item['saleman']?.toString() ?? '';
-          final doanhso = (item['doanhso'] != null && item['doanhso'] != 0)
-              ? _formatNumber(item['doanhso'])
-              : '';
           // Ưu tiên note của item, nếu không có thì lấy note của ticket
           final note = (item['note'] != null && item['note'].toString().isNotEmpty)
               ? item['note'].toString()
@@ -2122,26 +2111,48 @@ class _HistoryScreenState extends State<HistoryScreen> {
                   ? ticket['note'].toString()
                   : '';
           final imeiCellValue = _formatImeiForExcelCell(imei);
+          
+          // Tính số lượng và thành tiền
+          final quantity = tableName == 'transporter_orders'
+              ? (item['imei'] != null ? (item['imei'] as String).split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).length : 0)
+              : (num.tryParse((item['quantity'] ?? 0).toString())?.toInt() ?? 0);
+          final amountValue = num.tryParse(amount.toString())?.toDouble() ?? 0.0;
+          final totalAmount = amountValue * quantity;
 
-          final rowValues = <String>[
-            type,
-            itemPartner,
-            productName,
-            warehouseName,
-            imeiCellValue,
-            _formatNumber(amount),
-            currency,
-            quantity,
-            date,
-            account,
-            customerPrice,
-            transporterPrice,
-            transporterName,
-            saleman,
-            doanhso,
-            note,
+          // Tạo danh sách cell values với đúng kiểu dữ liệu
+          final rowData = <CellValue>[
+            TextCellValue(type),
+            TextCellValue(itemPartner),
+            TextCellValue(productName),
+            TextCellValue(warehouseName),
+            TextCellValue(imeiCellValue),
+            // Số Tiền (index 5) - số thực
+            amount != null && amount != 0 
+                ? DoubleCellValue(amountValue)
+                : DoubleCellValue(0.0),
+            TextCellValue(currency),
+            // Số Lượng (index 7) - số nguyên
+            IntCellValue(quantity),
+            // Thành tiền (index 8) - số thực (Số Tiền * Số Lượng)
+            DoubleCellValue(totalAmount),
+            TextCellValue(date),
+            TextCellValue(account),
+            // Tiền cọc (index 10) - số thực
+            (isShipCodItem || isCodHoanItem) && item['customer_price'] != null
+                ? DoubleCellValue(num.tryParse(item['customer_price'].toString())?.toDouble() ?? 0.0)
+                : TextCellValue(''),
+            // Tiền COD (index 11) - số thực
+            (isShipCodItem || isCodHoanItem) && item['transporter_price'] != null
+                ? DoubleCellValue(num.tryParse(item['transporter_price'].toString())?.toDouble() ?? 0.0)
+                : TextCellValue(''),
+            TextCellValue(transporterName),
+            TextCellValue(saleman),
+            // Doanh số nhân viên (index 14) - số thực
+            item['doanhso'] != null && item['doanhso'] != 0
+                ? DoubleCellValue(num.tryParse(item['doanhso'].toString())?.toDouble() ?? 0.0)
+                : TextCellValue(''),
+            TextCellValue(note),
           ];
-          final rowData = rowValues.map(TextCellValue.new).toList();
           
           sheet.appendRow(rowData);
           
@@ -2157,12 +2168,26 @@ class _HistoryScreenState extends State<HistoryScreen> {
           );
             final isMultiline = multilineColumns.contains(columnIndex);
             cell.cellStyle = isMultiline ? multilineDataStyle : dataStyle;
+            // Lấy giá trị string để tính toán metrics (cho text wrapping)
+            final cellValue = rowData[columnIndex];
+            String valueString;
+            if (cellValue is TextCellValue) {
+              // Lấy giá trị từ TextCellValue một cách an toàn
+              final value = cellValue.value;
+              valueString = value.toString();
+            } else if (cellValue is IntCellValue) {
+              valueString = cellValue.value.toString();
+            } else if (cellValue is DoubleCellValue) {
+              valueString = cellValue.value.toString();
+            } else {
+              valueString = '';
+            }
             _updateExcelMetrics(
               rowLineCounts: rowLineCounts,
               maxColumnWidths: maxColumnWidths,
               rowIndex: currentRowIndex,
               columnIndex: columnIndex,
-              value: rowValues[columnIndex],
+              value: valueString,
             );
           }
           

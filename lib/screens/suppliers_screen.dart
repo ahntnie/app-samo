@@ -785,8 +785,6 @@ class _SupplierDetailsDialogState extends State<SupplierDetailsDialog> {
           // Với financial_orders (không có IMEI hoặc không chia được), dùng totalAmount
           amountPerImei = totalAmount;
         }
-        final formattedAmountPerImei = formatNumber(amountPerImei);
-        final formattedAmount = formatNumber(totalAmount);
 
         if (hasMultipleImeis) {
           // ✅ Mỗi IMEI là 1 dòng - thứ tự cột mới: Loại giao dịch, Ngày, Tên sản phẩm, IMEI, Số lượng, Số tiền, Đơn vị tiền, Kho, Tài khoản, Ghi chú
@@ -797,7 +795,7 @@ class _SupplierDetailsDialogState extends State<SupplierDetailsDialog> {
               productName,
               singleImei,
               '1',
-              formattedAmountPerImei,
+              amountPerImei.toString(),
               currency,
               warehouseName,
               account,
@@ -813,7 +811,25 @@ class _SupplierDetailsDialogState extends State<SupplierDetailsDialog> {
               final header = headerLabels[columnIndex];
               final value = rowValues[columnIndex];
               final isMultiline = multilineHeaders.contains(header);
-              cell.value = TextCellValue(value);
+              
+              // Xác định loại cell value dựa trên header
+              if (header == 'Số lượng') {
+                // Cột số lượng - số nguyên
+                final intValue = int.tryParse(value);
+                cell.value = intValue != null ? IntCellValue(intValue) : TextCellValue(value);
+              } else if (header == 'Số tiền') {
+                // Cột số tiền - số thực
+                if (value.isNotEmpty && value != '') {
+                  final doubleValue = double.tryParse(value);
+                  cell.value = doubleValue != null ? DoubleCellValue(doubleValue) : TextCellValue(value);
+                } else {
+                  cell.value = TextCellValue('');
+                }
+              } else {
+                // Cột text
+                cell.value = TextCellValue(value);
+              }
+              
               cell.cellStyle = isMultiline ? styles.multiline : styles.centered;
               sizingTracker.update(currentRow - 1, columnIndex, value);
             }
@@ -826,7 +842,7 @@ class _SupplierDetailsDialogState extends State<SupplierDetailsDialog> {
             productName,
             imeiStr,
             quantityStr,
-            formattedAmount,
+            totalAmount.toString(),
             currency,
             warehouseName,
             account,
@@ -842,7 +858,25 @@ class _SupplierDetailsDialogState extends State<SupplierDetailsDialog> {
             final header = headerLabels[columnIndex];
             final value = rowValues[columnIndex];
             final isMultiline = multilineHeaders.contains(header);
-            cell.value = TextCellValue(value);
+            
+            // Xác định loại cell value dựa trên header
+            if (header == 'Số lượng') {
+              // Cột số lượng - số nguyên
+              final intValue = int.tryParse(value);
+              cell.value = intValue != null ? IntCellValue(intValue) : TextCellValue(value);
+            } else if (header == 'Số tiền') {
+              // Cột số tiền - số thực
+              if (value.isNotEmpty && value != '') {
+                final doubleValue = double.tryParse(value);
+                cell.value = doubleValue != null ? DoubleCellValue(doubleValue) : TextCellValue(value);
+              } else {
+                cell.value = TextCellValue('');
+              }
+            } else {
+              // Cột text
+              cell.value = TextCellValue(value);
+            }
+            
             cell.cellStyle = isMultiline ? styles.multiline : styles.centered;
             sizingTracker.update(currentRow - 1, columnIndex, value);
           }
