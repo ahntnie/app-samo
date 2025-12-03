@@ -22,6 +22,22 @@ class ThousandsFormatterLocal extends TextInputFormatter {
   }
 }
 
+class ThousandsFormatterLocalSigned extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+    String newText = newValue.text.replaceAll('.', '').replaceAll(',', '');
+    if (newText.isEmpty || newText == '-') return newValue;
+    final intValue = int.tryParse(newText);
+    if (intValue == null) return oldValue;
+    final formatted = NumberFormat('#,###', 'vi_VN').format(intValue.abs()).replaceAll(',', '.');
+    final result = intValue < 0 ? '-$formatted' : formatted;
+    return TextEditingValue(
+      text: result,
+      selection: TextSelection.collapsed(offset: result.length),
+    );
+  }
+}
+
 String formatNumberLocal(num value) {
   return NumberFormat('#,###', 'vi_VN').format(value).replaceAll(',', '.');
 }
@@ -71,6 +87,7 @@ class _InitialDataScreenState extends State<InitialDataScreen> with SingleTicker
   List<String> partnerNames = [];
   bool isLoadingPartners = true;
   String? errorMessagePartners;
+  num? currentDebt; // Công nợ hiện tại của đối tác
 
   // Controller cho TextField IMEI và Số tiền
   final TextEditingController imeiController = TextEditingController();
@@ -186,6 +203,51 @@ class _InitialDataScreenState extends State<InitialDataScreen> with SingleTicker
       setState(() {
         errorMessagePartners = 'Không thể tải dữ liệu đối tác: $e';
         isLoadingPartners = false;
+      });
+    }
+  }
+
+  Future<void> _fetchCurrentDebt() async {
+    if (partnerName == null || partnerName!.isEmpty) {
+      setState(() {
+        currentDebt = null;
+      });
+      return;
+    }
+
+    try {
+      final table = selectedPartnerType == 'supplier'
+          ? 'suppliers'
+          : selectedPartnerType == 'customer'
+              ? 'customers'
+              : selectedPartnerType == 'fixer'
+                  ? 'fix_units'
+                  : 'transporters';
+
+      final debtColumn = selectedPartnerType == 'transporter'
+          ? 'debt'
+          : partnerCurrency == 'VND'
+              ? 'debt_vnd'
+              : partnerCurrency == 'CNY'
+                  ? 'debt_cny'
+                  : 'debt_usd';
+
+      final response = await widget.tenantClient
+          .from(table)
+          .select(debtColumn)
+          .eq('name', partnerName!)
+          .maybeSingle();
+
+      setState(() {
+        if (response != null && response[debtColumn] != null) {
+          currentDebt = num.tryParse(response[debtColumn].toString()) ?? 0;
+        } else {
+          currentDebt = 0;
+        }
+      });
+    } catch (e) {
+      setState(() {
+        currentDebt = null;
       });
     }
   }
@@ -1011,23 +1073,10 @@ class _InitialDataScreenState extends State<InitialDataScreen> with SingleTicker
       return;
     }
 
-    final debtAmount = double.tryParse(partnerDebtController.text.replaceAll('.', '')) ?? 0;
-    if (debtAmount <= 0) {
-      await showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Lỗi'),
-          content: const Text('Số tiền công nợ phải lớn hơn 0!'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Đóng'),
-            ),
-          ],
-        ),
-      );
-      return;
-    }
+    final cleanedText = partnerDebtController.text.replaceAll('.', '');
+    final isNegative = cleanedText.trim().startsWith('-');
+    final debtAmount = double.tryParse(cleanedText.replaceAll('-', '')) ?? 0;
+    final finalDebtAmount = isNegative ? -debtAmount : debtAmount;
 
     await showDialog(
       context: context,
@@ -1041,7 +1090,7 @@ class _InitialDataScreenState extends State<InitialDataScreen> with SingleTicker
               Text(
                   'Loại đối tác: ${partnerTypeOptions.firstWhere((opt) => opt['value'] == selectedPartnerType)['display']}'),
               Text('Tên đối tác: $partnerName'),
-              Text('Số tiền: ${formatNumberLocal(debtAmount)} $partnerCurrency'),
+              Text('Số tiền: ${formatNumberLocal(finalDebtAmount.abs())}${finalDebtAmount < 0 ? ' (âm)' : ''} $partnerCurrency'),
             ],
           ),
         ),
@@ -1097,14 +1146,9 @@ class _InitialDataScreenState extends State<InitialDataScreen> with SingleTicker
                             ? 'debt_cny'
                             : 'debt_usd';
 
-                final currentDebt = existingPartner != null
-                    ? double.tryParse(existingPartner[debtColumn].toString()) ?? 0
-                    : 0;
-                final updatedDebt = currentDebt + debtAmount;
-
                 await widget.tenantClient
                     .from(table)
-                    .update({debtColumn: updatedDebt})
+                    .update({debtColumn: finalDebtAmount})
                     .eq('name', partnerName!);
 
                 setState(() {
@@ -1507,6 +1551,7 @@ class _InitialDataScreenState extends State<InitialDataScreen> with SingleTicker
                                     selectedPartnerType = val ?? 'supplier';
                                     partnerName = null;
                                     partnerCurrency = selectedPartnerType == 'transporter' ? 'VND' : 'VND';
+                                    currentDebt = null;
                                   });
                                   _fetchPartnerData();
                                 },
@@ -1525,7 +1570,10 @@ class _InitialDataScreenState extends State<InitialDataScreen> with SingleTicker
                                           ..sort((a, b) => a.toLowerCase().indexOf(query).compareTo(b.toLowerCase().indexOf(query)))
                                           ..take(3);
                                       },
-                                      onSelected: (val) => setState(() => partnerName = val),
+                                      onSelected: (val) {
+                                        setState(() => partnerName = val);
+                                        _fetchCurrentDebt();
+                                      },
                                       fieldViewBuilder: (context, controller, focusNode, onSubmit) {
                                         return TextField(
                                           controller: controller,
@@ -1546,13 +1594,25 @@ class _InitialDataScreenState extends State<InitialDataScreen> with SingleTicker
                                 ),
                               ],
                             ),
+                            if (partnerName != null && currentDebt != null)
+                              Padding(
+                                padding: const EdgeInsets.only(left: 12, top: 4, bottom: 8),
+                                child: Text(
+                                  'Công nợ hiện tại: ${formatNumberLocal(currentDebt!)} $partnerCurrency',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: currentDebt! < 0 ? Colors.red : Colors.grey[700],
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ),
                             wrapField(
                               TextFormField(
                                 controller: partnerDebtController,
-                                keyboardType: TextInputType.number,
-                                inputFormatters: [ThousandsFormatterLocal()],
+                                keyboardType: TextInputType.text,
+                                inputFormatters: [ThousandsFormatterLocalSigned()],
                                 decoration: const InputDecoration(
-                                  labelText: 'Số tiền',
+                                  labelText: 'Công nợ cập nhật mới ',
                                   border: InputBorder.none,
                                   isDense: true,
                                 ),
@@ -1571,7 +1631,10 @@ class _InitialDataScreenState extends State<InitialDataScreen> with SingleTicker
                                   border: InputBorder.none,
                                   isDense: true,
                                 ),
-                                onChanged: (val) => setState(() => partnerCurrency = val ?? 'VND'),
+                                onChanged: (val) {
+                                  setState(() => partnerCurrency = val ?? 'VND');
+                                  _fetchCurrentDebt();
+                                },
                               ),
                             ),
                             const SizedBox(height: 20),

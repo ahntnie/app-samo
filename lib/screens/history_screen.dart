@@ -1,8 +1,8 @@
-import 'package:flutter/material.dart' hide Border, BorderStyle;
+import 'package:flutter/material.dart' hide BorderStyle;
 import 'package:flutter/services.dart' show Clipboard, ClipboardData, rootBundle;
 import 'package:intl/intl.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:excel/excel.dart';
+import 'package:excel/excel.dart' as excel;
 import 'package:open_file/open_file.dart';
 import 'dart:io';
 import 'dart:math' as math;
@@ -30,7 +30,7 @@ class HistoryScreen extends StatefulWidget {
 }
 
 class _HistoryScreenState extends State<HistoryScreen> {
-  String filterType = 'all';
+  Set<String> selectedFilterTypes = {'all'};
   DateTime? dateFrom;
   DateTime? dateTo;
   final TextEditingController _dateFromController = TextEditingController();
@@ -38,21 +38,21 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
   final List<Map<String, String>> allTicketTypeOptions = [
     {'value': 'all', 'display': 'Loại Phiếu', 'permission': ''},
-    {'value': 'cost', 'display': 'Chi phí', 'permission': 'access_financial_account_form'},
-    {'value': 'payment', 'display': 'Chi Thanh Toán Đối Tác', 'permission': 'access_financial_account_form'},
+    {'value': 'transfer_fund', 'display': 'Chuyển Quỹ', 'permission': 'access_transfer_fund_form'},
     {'value': 'exchange', 'display': 'Đổi Tiền', 'permission': 'access_financial_account_form'},
+    {'value': 'cost', 'display': 'Chi phí', 'permission': 'access_financial_account_form'},
     {'value': 'income_other', 'display': 'Thu Nhập Khác', 'permission': 'access_financial_account_form'},
+    {'value': 'payment', 'display': 'Chi Thanh Toán Đối Tác', 'permission': 'access_financial_account_form'},
     {'value': 'receive', 'display': 'Thu Tiền Đối Tác', 'permission': 'access_financial_account_form'},
-    {'value': 'fix_receive_orders', 'display': 'Nhận Hàng Sửa Xong', 'permission': 'access_fix_receive_form'},
-    {'value': 'fix_send_orders', 'display': 'Gửi Sửa', 'permission': 'access_fix_send_form'},
     {'value': 'import_orders', 'display': 'Nhập Hàng', 'permission': 'access_import_form'},
-    {'value': 'reimport_orders', 'display': 'Nhập Lại Hàng', 'permission': 'access_reimport_form'},
-    {'value': 'chuyển kho quốc tế', 'display': 'Chuyển Kho Quốc Tế', 'permission': 'access_transfer_global_form'},
+    {'value': 'return_orders', 'display': 'Trả Hàng', 'permission': 'access_return_form'},
+    {'value': 'fix_send_orders', 'display': 'Gửi Sửa', 'permission': 'access_fix_send_form'},
+    {'value': 'fix_receive_orders', 'display': 'Nhận Hàng Sửa Xong', 'permission': 'access_fix_receive_form'},
     {'value': 'chuyển kho nội địa', 'display': 'Chuyển Kho Nội Địa', 'permission': 'access_transfer_local_form'},
-    {'value': 'transfer_fund', 'display': 'Chuyển Quỹ', 'permission': 'access_transaction_form'},
+    {'value': 'chuyển kho quốc tế', 'display': 'Chuyển Kho Quốc Tế', 'permission': 'access_transfer_global_form'},
     {'value': 'nhập kho vận chuyển', 'display': 'Nhập Kho Vận Chuyển', 'permission': 'access_transfer_receive_form'},
     {'value': 'sale_orders', 'display': 'Bán Hàng', 'permission': 'access_sale_form'},
-    {'value': 'return_orders', 'display': 'Trả Hàng', 'permission': 'access_return_form'},
+    {'value': 'reimport_orders', 'display': 'Nhập Lại Hàng', 'permission': 'access_reimport_form'},
   ];
 
   late List<Map<String, String>> ticketTypeOptions;
@@ -96,7 +96,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
               _scrollController.position.maxScrollExtent - 200 &&
           !isLoadingMore &&
           hasMoreData &&
-          filterType == 'all' &&
+          selectedFilterTypes.contains('all') &&
           dateFrom == null &&
           dateTo == null) {
         _loadMoreTickets();
@@ -363,6 +363,17 @@ class _HistoryScreenState extends State<HistoryScreen> {
     }
   }
 
+  String _formatDateTime(String? dateStr) {
+    if (dateStr == null) return '';
+    try {
+      final parsedDate = DateTime.parse(dateStr);
+      return DateFormat('HH:mm:ss - dd/MM/yyyy').format(parsedDate);
+    } catch (e) {
+      developer.log('formatDateTime: Error $dateStr: $e');
+      return dateStr;
+    }
+  }
+
   String _formatNumber(num? amount) {
     if (amount == null) return '0';
     try {
@@ -434,7 +445,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 
   void _applyExcelSizing({
-    required Sheet sheet,
+    required excel.Sheet sheet,
     required List<double> maxColumnWidths,
     required Map<int, int> rowLineCounts,
   }) {
@@ -487,6 +498,11 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
 
   String _getDisplayType(String type, String table, {String? account}) {
+    // Xử lý riêng cho transfer_fund
+    if (type == 'transfer_fund') {
+      return 'Chuyển quỹ';
+    }
+    
     String typeKey = type;
     if (table == 'fix_receive_orders') {
       typeKey = 'fix_receive_orders';
@@ -516,7 +532,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 
   Future<List<Map<String, dynamic>>> _fetchTickets({bool paginated = false}) async {
-    developer.log('fetchTickets: Paginated: $paginated, filterType: $filterType');
+    developer.log('fetchTickets: Paginated: $paginated, selectedFilterTypes: $selectedFilterTypes');
     List<Map<String, dynamic>> allTickets = [];
     final ticketIds = <String>{};
 
@@ -525,7 +541,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         widget.permissions.contains('access_transfer_receive_form');
 
     if (!hasTransportPermission &&
-        (filterType == 'chuyển kho quốc tế' || filterType == 'chuyển kho nội địa' || filterType == 'nhập kho vận chuyển')) {
+        (selectedFilterTypes.contains('chuyển kho quốc tế') || selectedFilterTypes.contains('chuyển kho nội địa') || selectedFilterTypes.contains('nhập kho vận chuyển'))) {
       setState(() {
         ticketError = 'Bạn không có quyền xem các phiếu vận chuyển';
       });
@@ -537,7 +553,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         {
           'table': 'financial_orders',
           'key': 'id',
-          'select': 'id, type, created_at, partner_name, partner_id, amount, currency, iscancelled, from_amount, from_currency, to_amount, to_currency, to_account, partner_type, account, note',
+          'select': 'id, type, created_at, partner_name, partner_id, amount, currency, iscancelled, from_amount, from_currency, from_account, to_amount, to_currency, to_account, partner_type, account, note',
           'partnerField': 'partner_name',
           'amountField': 'amount',
           'dateField': 'created_at',
@@ -638,7 +654,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
         }
         query = query.order(dateField, ascending: false);
 
-        if (paginated && filterType == 'all' && dateFrom == null && dateTo == null) {
+        if (paginated && selectedFilterTypes.contains('all') && dateFrom == null && dateTo == null) {
           final start = currentPage * pageSize;
           final end = start + pageSize - 1;
           response = await query.range(start, end);
@@ -663,7 +679,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
           }
           query = query.order(dateField, ascending: false);
 
-          if (paginated && filterType == 'all' && dateFrom == null && dateTo == null) {
+          if (paginated && selectedFilterTypes.contains('all') && dateFrom == null && dateTo == null) {
             final start = currentPage * pageSize;
             final end = start + pageSize - 1;
             response = await query.range(start, end);
@@ -830,9 +846,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
             'account': tx['account']?.toString(),
             'from_amount': tx['from_amount'],
             'from_currency': tx['from_currency'],
+            'from_account': tx['from_account']?.toString(),
             'to_amount': tx['to_amount'],
             'to_currency': tx['to_currency'],
-            'to_account': tx['to_account'],
+            'to_account': tx['to_account']?.toString(),
             'customer_price': tx['customer_price'],
             'transporter_price': tx['transporter_price'],
             'transporter': tx['transporter'],
@@ -903,7 +920,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
       }
     }
 
-    allTickets = allTickets.where((ticket) => filterType == 'all' || ticket['type'] == filterType).toList();
+    allTickets = allTickets.where((ticket) {
+      if (selectedFilterTypes.contains('all')) return true;
+      return selectedFilterTypes.contains(ticket['type']);
+    }).toList();
 
     allTickets.sort((a, b) {
       final dateA = DateTime.tryParse(a['date']?.toString() ?? '1900-01-01') ?? DateTime(1900);
@@ -1302,6 +1322,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
     final isFinancialTicket = ticket['table'] == 'financial_orders';
     final financialType = ticket['type'] as String?;
+    final isTransferFund = financialType == 'transfer_fund';
+    // Các loại phiếu không có đối tác: transfer_fund, cost, exchange, income_other
+    final hasNoPartner = isTransferFund || 
+        financialType == 'cost' || 
+        financialType == 'exchange' || 
+        financialType == 'income_other';
     
     // Kiểm tra nếu có nhiều đối tác khác nhau trong ticket
     final hasMultiplePartners = ticket['table'] == 'return_orders' || ticket['table'] == 'reimport_orders';
@@ -1358,22 +1384,25 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       ? (ticket['items'][0]['account']?.toString())
                       : null,
                 )),
-                _buildDetailRow(
-                  'Đối tác',
-                  displayPartner ?? 'N/A',
-                  partnerId: ticket['partner_id']?.toString(),
-                  partnerType: ticket['partner_type']?.toString(),
-                  dialogContext: context,
-                ),
+                if (!hasNoPartner)
+                  _buildDetailRow(
+                    'Đối tác',
+                    displayPartner ?? 'N/A',
+                    partnerId: ticket['partner_id']?.toString(),
+                    partnerType: ticket['partner_type']?.toString(),
+                    dialogContext: context,
+                  ),
                 if (isFinancialTicket && financialType == 'exchange') ...[
                   _buildDetailRow('Số Tiền Đổi', '${_formatNumber(ticket['items'][0]['from_amount'])} ${ticket['items'][0]['from_currency']}'),
                   if (ticket['items'][0]['to_amount'] != null && ticket['items'][0]['to_currency'] != null)
                     _buildDetailRow('Số Tiền Nhận', '${_formatNumber(ticket['items'][0]['to_amount'])} ${ticket['items'][0]['to_currency']}'),
-                ] else if (isFinancialTicket)
+                ] else if (isFinancialTicket && isTransferFund)
+                  _buildDetailRow('Số Tiền', '${_formatNumber(ticket['items'][0]['from_amount'])} ${ticket['items'][0]['from_currency'] ?? 'VND'}')
+                else if (isFinancialTicket)
                   _buildDetailRow('Số Tiền', '${_formatNumber(ticket['items'][0]['amount'])} ${ticket['items'][0]['currency'] ?? 'VND'}')
                 else
                   _buildDetailRow('Tổng Tiền', '${_formatNumber(ticket['total_amount'])} ${ticket['currency'] ?? 'VND'}'),
-                _buildDetailRow('Ngày', _formatDate(ticket['date'])),
+                _buildDetailRow('Thời gian', _formatDateTime(ticket['date'])),
                 if (!isFinancialTicket) ...[
                   _buildDetailRow('Số Lượng', ticket['table'] == 'transporter_orders' ? ticket['total_quantity'].toString() : _formatNumber(ticket['total_quantity'])),
                 ],
@@ -1385,6 +1414,13 @@ class _HistoryScreenState extends State<HistoryScreen> {
                       ticket['items'][0]['account'].toString() != 'Ship COD' &&
                       ticket['items'][0]['account'].toString() != 'Cod hoàn')))
                   _buildDetailRow('Tài Khoản', ticket['items'][0]['account'].toString()),
+                // Hiển thị tài khoản chuyển và tài khoản nhận cho transfer_fund
+                if (isTransferFund) ...[
+                  if (ticket['items'][0]['from_account'] != null && ticket['items'][0]['from_account'].toString().isNotEmpty)
+                    _buildDetailRow('Tài khoản chuyển', ticket['items'][0]['from_account'].toString()),
+                  if (ticket['items'][0]['to_account'] != null && ticket['items'][0]['to_account'].toString().isNotEmpty)
+                    _buildDetailRow('Tài khoản nhận', ticket['items'][0]['to_account'].toString()),
+                ],
                 // Hiển thị thông tin Ship COD: tiền cọc, tiền COD, đơn vị vận chuyển (tổng của toàn phiếu)
                 if (isShipCod) ...[
                   if (totalCustomerPrice > 0)
@@ -1980,7 +2016,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       }
 
       List<Map<String, dynamic>> exportTickets = tickets;
-      if (hasMoreData && filterType == 'all' && dateFrom == null && dateTo == null) {
+      if (hasMoreData && selectedFilterTypes.contains('all') && dateFrom == null && dateTo == null) {
         exportTickets = await _fetchTickets(paginated: false);
       }
 
@@ -1992,9 +2028,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
         return;
       }
 
-      final excel = Excel.createExcel();
-      excel.delete('Sheet1');
-      final sheet = excel['LichSuPhieu'];
+      final excelFile = excel.Excel.createExcel();
+      excelFile.delete('Sheet1');
+      final sheet = excelFile['LichSuPhieu'];
 
       final headerLabels = <String>[
         'Loại Phiếu',
@@ -2008,6 +2044,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
         'Thành tiền',
         'Ngày',
         'Tài Khoản',
+        'Tài khoản chuyển',
+        'Tài khoản nhận',
         'Tiền cọc',
         'Tiền COD',
         'Đơn vị vận chuyển',
@@ -2015,38 +2053,38 @@ class _HistoryScreenState extends State<HistoryScreen> {
         'Doanh số nhân viên',
         'Ghi chú',
       ];
-      final headers = headerLabels.map(TextCellValue.new).toList();
+      final headers = headerLabels.map(excel.TextCellValue.new).toList();
 
       sheet.appendRow(headers);
       
-      final border = Border(borderStyle: BorderStyle.Thin);
-      final headerStyle = CellStyle(
+      final border = excel.Border(borderStyle: excel.BorderStyle.Thin);
+      final headerStyle = excel.CellStyle(
         bold: true,
         topBorder: border,
         bottomBorder: border,
         leftBorder: border,
         rightBorder: border,
-        verticalAlign: VerticalAlign.Center,
-        horizontalAlign: HorizontalAlign.Center,
-        textWrapping: TextWrapping.WrapText,
+        verticalAlign: excel.VerticalAlign.Center,
+        horizontalAlign: excel.HorizontalAlign.Center,
+        textWrapping: excel.TextWrapping.WrapText,
       );
-      final dataStyle = CellStyle(
+      final dataStyle = excel.CellStyle(
         topBorder: border,
         bottomBorder: border,
         leftBorder: border,
         rightBorder: border,
-        verticalAlign: VerticalAlign.Center,
-        horizontalAlign: HorizontalAlign.Center,
-        textWrapping: TextWrapping.WrapText,
+        verticalAlign: excel.VerticalAlign.Center,
+        horizontalAlign: excel.HorizontalAlign.Center,
+        textWrapping: excel.TextWrapping.WrapText,
       );
-      final multilineDataStyle = CellStyle(
+      final multilineDataStyle = excel.CellStyle(
         topBorder: border,
         bottomBorder: border,
         leftBorder: border,
         rightBorder: border,
-        verticalAlign: VerticalAlign.Top,
-        horizontalAlign: HorizontalAlign.Center,
-        textWrapping: TextWrapping.WrapText,
+        verticalAlign: excel.VerticalAlign.Top,
+        horizontalAlign: excel.HorizontalAlign.Center,
+        textWrapping: excel.TextWrapping.WrapText,
       );
 
       final columnCount = headers.length;
@@ -2055,7 +2093,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
       for (int columnIndex = 0; columnIndex < columnCount; columnIndex++) {
         final cell = sheet.cell(
-          CellIndex.indexByColumnRow(columnIndex: columnIndex, rowIndex: 0),
+          excel.CellIndex.indexByColumnRow(columnIndex: columnIndex, rowIndex: 0),
         );
         cell.cellStyle = headerStyle;
         _updateExcelMetrics(
@@ -2068,7 +2106,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       }
 
       int dataRowIndex = 2; // Bắt đầu từ row 2 (sau header row)
-      const multilineColumns = {4, 16}; // IMEI (4) và Ghi chú (16)
+      const multilineColumns = {4, 18}; // IMEI (4) và Ghi chú (18)
       for (var ticket in exportTickets) {
         final tableName = ticket['table'] as String;
         final account = ticket['items'] is List && (ticket['items'] as List).isNotEmpty 
@@ -2084,8 +2122,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
           final productName = item['product_name']?.toString() ?? 'N/A';
           final warehouseName = item['warehouse_name']?.toString() ?? 'N/A';
           final imei = item['imei']?.toString() ?? 'N/A';
-          final amount = item['amount'] ?? item['total_amount'] ?? 0;
-          final currency = item['currency']?.toString() ?? 'VND';
+          final isTransferFund = ticket['type'] == 'transfer_fund';
+          // Xử lý số tiền cho transfer_fund
+          final amount = isTransferFund 
+              ? (item['from_amount'] ?? 0)
+              : (item['amount'] ?? item['total_amount'] ?? 0);
+          final currency = isTransferFund
+              ? (item['from_currency']?.toString() ?? 'VND')
+              : (item['currency']?.toString() ?? 'VND');
           // Hiển thị tài khoản cho financial_orders (payment, receive, cost, income_other) nhưng không hiển thị cho exchange và transfer_fund (vì có to_account riêng)
           // Và hiển thị cho non-financial tickets nhưng không hiển thị nếu là Ship COD hoặc Cod hoàn (vì thừa)
           final account = (item['account'] != null && 
@@ -2095,6 +2139,9 @@ class _HistoryScreenState extends State<HistoryScreen> {
               item['account'].toString() != 'Cod hoàn')
               ? item['account'].toString()
               : '';
+          // Tài khoản chuyển và tài khoản nhận cho transfer_fund
+          final fromAccount = isTransferFund ? (item['from_account']?.toString() ?? '') : '';
+          final toAccount = isTransferFund ? (item['to_account']?.toString() ?? '') : '';
           // Tiền cọc và tiền COD hiển thị cho sale_orders với account == 'Ship COD' hoặc reimport_orders với account == 'Cod hoàn'
           final isShipCodItem = tableName == 'sale_orders' && item['account']?.toString() == 'Ship COD';
           final isCodHoanItem = tableName == 'reimport_orders' && item['account']?.toString() == 'Cod hoàn';
@@ -2120,38 +2167,42 @@ class _HistoryScreenState extends State<HistoryScreen> {
           final totalAmount = amountValue * quantity;
 
           // Tạo danh sách cell values với đúng kiểu dữ liệu
-          final rowData = <CellValue>[
-            TextCellValue(type),
-            TextCellValue(itemPartner),
-            TextCellValue(productName),
-            TextCellValue(warehouseName),
-            TextCellValue(imeiCellValue),
+          final rowData = <excel.CellValue>[
+            excel.TextCellValue(type),
+            excel.TextCellValue(itemPartner),
+            excel.TextCellValue(productName),
+            excel.TextCellValue(warehouseName),
+            excel.TextCellValue(imeiCellValue),
             // Số Tiền (index 5) - số thực
             amount != null && amount != 0 
-                ? DoubleCellValue(amountValue)
-                : DoubleCellValue(0.0),
-            TextCellValue(currency),
+                ? excel.DoubleCellValue(amountValue)
+                : excel.DoubleCellValue(0.0),
+            excel.TextCellValue(currency),
             // Số Lượng (index 7) - số nguyên
-            IntCellValue(quantity),
+            excel.IntCellValue(quantity),
             // Thành tiền (index 8) - số thực (Số Tiền * Số Lượng)
-            DoubleCellValue(totalAmount),
-            TextCellValue(date),
-            TextCellValue(account),
-            // Tiền cọc (index 10) - số thực
+            excel.DoubleCellValue(totalAmount),
+            excel.TextCellValue(date),
+            excel.TextCellValue(account),
+            // Tài khoản chuyển (index 11) - cho transfer_fund
+            excel.TextCellValue(fromAccount),
+            // Tài khoản nhận (index 12) - cho transfer_fund
+            excel.TextCellValue(toAccount),
+            // Tiền cọc (index 13) - số thực
             (isShipCodItem || isCodHoanItem) && item['customer_price'] != null
-                ? DoubleCellValue(num.tryParse(item['customer_price'].toString())?.toDouble() ?? 0.0)
-                : TextCellValue(''),
-            // Tiền COD (index 11) - số thực
+                ? excel.DoubleCellValue(num.tryParse(item['customer_price'].toString())?.toDouble() ?? 0.0)
+                : excel.TextCellValue(''),
+            // Tiền COD (index 14) - số thực
             (isShipCodItem || isCodHoanItem) && item['transporter_price'] != null
-                ? DoubleCellValue(num.tryParse(item['transporter_price'].toString())?.toDouble() ?? 0.0)
-                : TextCellValue(''),
-            TextCellValue(transporterName),
-            TextCellValue(saleman),
+                ? excel.DoubleCellValue(num.tryParse(item['transporter_price'].toString())?.toDouble() ?? 0.0)
+                : excel.TextCellValue(''),
+            excel.TextCellValue(transporterName),
+            excel.TextCellValue(saleman),
             // Doanh số nhân viên (index 14) - số thực
             item['doanhso'] != null && item['doanhso'] != 0
-                ? DoubleCellValue(num.tryParse(item['doanhso'].toString())?.toDouble() ?? 0.0)
-                : TextCellValue(''),
-            TextCellValue(note),
+                ? excel.DoubleCellValue(num.tryParse(item['doanhso'].toString())?.toDouble() ?? 0.0)
+                : excel.TextCellValue(''),
+            excel.TextCellValue(note),
           ];
           
           sheet.appendRow(rowData);
@@ -2161,7 +2212,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
               columnIndex < columnCount;
               columnIndex++) {
             final cell = sheet.cell(
-              CellIndex.indexByColumnRow(
+              excel.CellIndex.indexByColumnRow(
                 columnIndex: columnIndex,
                 rowIndex: currentRowIndex,
               ),
@@ -2171,13 +2222,13 @@ class _HistoryScreenState extends State<HistoryScreen> {
             // Lấy giá trị string để tính toán metrics (cho text wrapping)
             final cellValue = rowData[columnIndex];
             String valueString;
-            if (cellValue is TextCellValue) {
+            if (cellValue is excel.TextCellValue) {
               // Lấy giá trị từ TextCellValue một cách an toàn
               final value = cellValue.value;
               valueString = value.toString();
-            } else if (cellValue is IntCellValue) {
+            } else if (cellValue is excel.IntCellValue) {
               valueString = cellValue.value.toString();
-            } else if (cellValue is DoubleCellValue) {
+            } else if (cellValue is excel.DoubleCellValue) {
               valueString = cellValue.value.toString();
             } else {
               valueString = '';
@@ -2201,8 +2252,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
         rowLineCounts: rowLineCounts,
       );
 
-      if (excel.sheets.containsKey('Sheet1')) {
-        excel.delete('Sheet1');
+      if (excelFile.sheets.containsKey('Sheet1')) {
+        excelFile.delete('Sheet1');
         print('Sheet1 đã được xóa trước khi xuất file.');
       } else {
         print('Không tìm thấy Sheet1 sau khi tạo các sheet.');
@@ -2223,7 +2274,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
       final filePath = '${downloadsDir.path}/$fileName';
       final file = File(filePath);
 
-      final excelBytes = excel.encode();
+      final excelBytes = excelFile.encode();
       if (excelBytes == null) {
         throw Exception('Không tạo được file Excel');
       }
@@ -2251,37 +2302,36 @@ class _HistoryScreenState extends State<HistoryScreen> {
   }
 
   Widget _buildFilterRow() {
+    final displayText = selectedFilterTypes.contains('all')
+        ? 'Loại Phiếu'
+        : selectedFilterTypes.length == 1
+            ? ticketTypeOptions.firstWhere((opt) => opt['value'] == selectedFilterTypes.first, orElse: () => {'display': 'Loại Phiếu'})['display']!
+            : '${selectedFilterTypes.length} loại phiếu';
+    
     return Row(
       children: [
         Expanded(
           flex: 3,
-          child: ClipRect(
-            child: DropdownButtonFormField<String>(
-              value: filterType,
-              isExpanded: true,
-              isDense: true,
-              items: ticketTypeOptions.map((option) {
-                return DropdownMenuItem<String>(
-                  value: option['value'],
-                  child: Text(
-                    option['display']!,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 12),
+          child: InkWell(
+            onTap: () => _showFilterDialog(),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.grey),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      displayText,
+                      style: const TextStyle(fontSize: 12),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
-                );
-              }).toList(),
-              onChanged: (value) {
-                setState(() {
-                  filterType = value ?? 'all';
-                  hasMoreData = false;
-                  _loadTickets();
-                });
-              },
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                floatingLabelBehavior: FloatingLabelBehavior.never,
+                  const Icon(Icons.arrow_drop_down, size: 20),
+                ],
               ),
             ),
           ),
@@ -2315,6 +2365,107 @@ class _HistoryScreenState extends State<HistoryScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  void _showFilterDialog() {
+    // Tạo bản sao của selectedFilterTypes để chỉnh sửa trong dialog
+    Set<String> tempSelectedTypes = Set.from(selectedFilterTypes);
+    
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Chọn loại phiếu'),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: ticketTypeOptions.length,
+              itemBuilder: (context, index) {
+                final option = ticketTypeOptions[index];
+                final value = option['value']!;
+                final display = option['display']!;
+                final isSelected = tempSelectedTypes.contains(value);
+                
+                return InkWell(
+                  onTap: () {
+                    setDialogState(() {
+                      if (value == 'all') {
+                        // Nếu chọn "all", chỉ giữ lại "all"
+                        tempSelectedTypes = {'all'};
+                      } else {
+                        // Bỏ "all" nếu đang chọn
+                        tempSelectedTypes.remove('all');
+                        // Toggle selection
+                        if (isSelected) {
+                          tempSelectedTypes.remove(value);
+                          // Nếu không còn gì được chọn, chọn "all"
+                          if (tempSelectedTypes.isEmpty) {
+                            tempSelectedTypes.add('all');
+                          }
+                        } else {
+                          tempSelectedTypes.add(value);
+                        }
+                      }
+                    });
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 20,
+                          height: 20,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: isSelected ? Colors.blue : Colors.grey,
+                              width: 2,
+                            ),
+                            color: isSelected ? Colors.blue : Colors.transparent,
+                          ),
+                          child: isSelected
+                              ? const Icon(Icons.check, size: 14, color: Colors.white)
+                              : null,
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            display,
+                            style: const TextStyle(fontSize: 14),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                setDialogState(() {
+                  tempSelectedTypes = {'all'};
+                });
+              },
+              child: const Text('Chọn tất cả'),
+            ),
+            TextButton(
+              onPressed: () {
+                setState(() {
+                  selectedFilterTypes = tempSelectedTypes;
+                  hasMoreData = false;
+                });
+                Navigator.pop(context);
+                _loadTickets();
+              },
+              child: const Text('Áp dụng'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -2374,6 +2525,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
   Widget _buildTicketCard(Map<String, dynamic> ticket) {
     final isFinancialTicket = ticket['table'] == 'financial_orders';
     final financialType = ticket['type'] as String?;
+    final isTransferFund = financialType == 'transfer_fund';
+    // Các loại phiếu không có đối tác: transfer_fund, cost, exchange, income_other
+    final hasNoPartner = isTransferFund || 
+        financialType == 'cost' || 
+        financialType == 'exchange' || 
+        financialType == 'income_other';
     
     // Kiểm tra nếu có nhiều đối tác khác nhau trong ticket
     final hasMultiplePartners = ticket['table'] == 'return_orders' || ticket['table'] == 'reimport_orders';
@@ -2400,9 +2557,12 @@ class _HistoryScreenState extends State<HistoryScreen> {
         subtitle: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Đối Tác: $displayPartner'),
+            if (!hasNoPartner)
+              Text('Đối Tác: $displayPartner'),
             if (isFinancialTicket && financialType == 'exchange')
               Text('Số Tiền: ${_formatNumber(ticket['items'][0]['from_amount'])} ${ticket['items'][0]['from_currency']}')
+            else if (isFinancialTicket && isTransferFund)
+              Text('Số Tiền: ${_formatNumber(ticket['items'][0]['from_amount'])} ${ticket['items'][0]['from_currency'] ?? 'VND'}')
             else if (isFinancialTicket)
               Text('Số Tiền: ${_formatNumber(ticket['items'][0]['amount'])} ${ticket['items'][0]['currency'] ?? 'VND'}')
             else if (ticket['total_amount'] != null)

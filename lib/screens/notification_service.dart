@@ -8,7 +8,7 @@ import '../helpers/global_cache_manager.dart';
 
 class NotificationService {
   static final FlutterLocalNotificationsPlugin
-      _flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+  _flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
   static bool _isAppInForeground = true;
   static late SupabaseClient _tenantClient;
   static String? _tenantUrl;
@@ -31,13 +31,13 @@ class NotificationService {
     tz.setLocalLocation(vietnam);
 
     // Request notification permissions first
-    final NotificationSettings settings =
-        await FirebaseMessaging.instance.requestPermission(
-      alert: true,
-      badge: true,
-      sound: true,
-      provisional: false,
-    );
+    final NotificationSettings settings = await FirebaseMessaging.instance
+        .requestPermission(
+          alert: true,
+          badge: true,
+          sound: true,
+          provisional: false,
+        );
     print('User granted permission: ${settings.authorizationStatus}');
 
     // Set up foreground message handling
@@ -74,18 +74,18 @@ class NotificationService {
         AndroidInitializationSettings('@mipmap/ic_launcher');
     const DarwinInitializationSettings initializationSettingsIOS =
         DarwinInitializationSettings(
-      requestAlertPermission: true,
-      requestBadgePermission: true,
-      requestSoundPermission: true,
-      defaultPresentAlert: true,
-      defaultPresentBadge: true,
-      defaultPresentSound: true,
-    );
+          requestAlertPermission: true,
+          requestBadgePermission: true,
+          requestSoundPermission: true,
+          defaultPresentAlert: true,
+          defaultPresentBadge: true,
+          defaultPresentSound: true,
+        );
     const InitializationSettings initializationSettings =
         InitializationSettings(
-      android: initializationSettingsAndroid,
-      iOS: initializationSettingsIOS,
-    );
+          android: initializationSettingsAndroid,
+          iOS: initializationSettingsIOS,
+        );
 
     const AndroidNotificationChannel channel = AndroidNotificationChannel(
       'high_importance_channel',
@@ -100,7 +100,8 @@ class NotificationService {
 
     await _flutterLocalNotificationsPlugin
         .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>()
+          AndroidFlutterLocalNotificationsPlugin
+        >()
         ?.createNotificationChannel(channel);
 
     await _flutterLocalNotificationsPlugin.initialize(
@@ -130,14 +131,14 @@ class NotificationService {
 
     // Lập lịch thông báo định kỳ (gate theo quyền)
     if (_permissions.contains('access_customers_screen')) {
-      await scheduleDailyNotification(
-        1,
-        "Nhắc Thu Hồi Công Nợ",
-        "Kiểm tra công nợ khách hàng",
-        14,
-        0,
-        checkDebtReminders,
-      );
+    await scheduleDailyNotification(
+      1,
+      "Nhắc Thu Hồi Công Nợ",
+      "Kiểm tra công nợ khách hàng",
+      14,
+      0,
+      checkDebtReminders,
+    );
     }
 
     await scheduleDailyNotification(
@@ -184,13 +185,12 @@ class NotificationService {
   }) async {
     try {
       print('Sending notification to all devices: $title - $body');
-
+      
       if (_tenantUrl == null || _tenantAnonKey == null) {
-        print(
-            'Error: Tenant credentials not set. Call NotificationService.init() first.');
+        print('Error: Tenant credentials not set. Call NotificationService.init() first.');
         return;
       }
-
+      
       // Gọi Edge Function từ main Supabase project (không phải tenant)
       final mainClient = Supabase.instance.client;
       final response = await mainClient.functions.invoke(
@@ -208,8 +208,7 @@ class NotificationService {
         final result = response.data;
         print('Notification sent successfully: ${jsonEncode(result)}');
       } else {
-        print(
-            'Error sending notification: ${response.status} - ${response.data}');
+        print('Error sending notification: ${response.status} - ${response.data}');
       }
     } catch (e) {
       print('Exception sending notification to all devices: $e');
@@ -218,11 +217,12 @@ class NotificationService {
 
   static Future<void> _saveDeviceToken(String token) async {
     try {
-      final existingToken = await _tenantClient
-          .from('device_tokens')
-          .select()
-          .eq('fcm_token', token)
-          .maybeSingle();
+      final existingToken =
+          await _tenantClient
+              .from('device_tokens')
+              .select()
+              .eq('fcm_token', token)
+              .maybeSingle();
       print('Kiểm tra FCM existingToken: $token');
       if (existingToken == null) {
         await _tenantClient.from('device_tokens').insert({
@@ -249,42 +249,43 @@ class NotificationService {
     try {
       await FirebaseMessaging.instance
           .setForegroundNotificationPresentationOptions(
-        alert: true,
-        badge: true,
-        sound: true,
-      );
-
+            alert: true,
+            badge: true,
+            sound: true,
+          );
+          
       const AndroidNotificationDetails androidPlatformChannelSpecifics =
           AndroidNotificationDetails(
-        'high_importance_channel',
-        'High Importance Notifications',
-        channelDescription: 'This channel is used for important notifications.',
-        importance: Importance.max,
-        priority: Priority.high,
-        showWhen: true,
-        playSound: true,
-        enableVibration: true,
-        fullScreenIntent: true,
-        category: AndroidNotificationCategory.message,
-        visibility: NotificationVisibility.public,
-        ticker: 'New notification',
-        ongoing: false,
-        channelShowBadge: true,
-        autoCancel: true,
-        styleInformation: BigTextStyleInformation(''),
-      );
+            'high_importance_channel',
+            'High Importance Notifications',
+            channelDescription:
+                'This channel is used for important notifications.',
+            importance: Importance.max,
+            priority: Priority.high,
+            showWhen: true,
+            playSound: true,
+            enableVibration: true,
+            fullScreenIntent: true,
+            category: AndroidNotificationCategory.message,
+            visibility: NotificationVisibility.public,
+            ticker: 'New notification',
+            ongoing: false,
+            channelShowBadge: true,
+            autoCancel: true,
+            styleInformation: BigTextStyleInformation(''),
+          );
       const DarwinNotificationDetails iOSPlatformChannelSpecifics =
           DarwinNotificationDetails(
-        presentAlert: true,
-        presentBadge: true,
-        presentSound: true,
-        presentBanner: true,
-        presentList: true,
-        sound: 'default',
-        badgeNumber: 1,
-        interruptionLevel: InterruptionLevel.timeSensitive,
-        threadIdentifier: 'high_importance_channel',
-      );
+            presentAlert: true,
+            presentBadge: true,
+            presentSound: true,
+            presentBanner: true,
+            presentList: true,
+            sound: 'default',
+            badgeNumber: 1,
+            interruptionLevel: InterruptionLevel.timeSensitive,
+            threadIdentifier: 'high_importance_channel',
+          );
       const NotificationDetails platformChannelSpecifics = NotificationDetails(
         android: androidPlatformChannelSpecifics,
         iOS: iOSPlatformChannelSpecifics,
@@ -324,8 +325,6 @@ class NotificationService {
           priority: Priority.high,
         ),
       ),
-      uiLocalNotificationDateInterpretation:
-          UILocalNotificationDateInterpretation.absoluteTime,
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
       matchDateTimeComponents: DateTimeComponents.time,
       payload: 'daily',
@@ -496,11 +495,11 @@ class NotificationService {
       if (daysSinceImport > 7) {
         final productId = product['product_id']?.toString();
         if (productId == null || productId.isEmpty) continue;
-
+        
         // Lấy tên sản phẩm từ cache
         final productName = cacheManager.getProductName(productId);
         if (productName.isEmpty || productName == 'Không xác định') continue;
-
+        
         // Tạo key để gom: "productName|daysSinceImport"
         final key = '$productName|$daysSinceImport';
         groupedProducts[key] = (groupedProducts[key] ?? 0) + 1;

@@ -331,6 +331,7 @@ class _ReimportFormState extends State<ReimportForm> {
             .select('customer, customer_id, price, currency, account')
             .eq('product_id', productId!)
             .like('imei', '%$input%')
+            .eq('iscancelled', false)
             .order('created_at', ascending: false)
             .limit(1)
             .maybeSingle(),
@@ -658,8 +659,9 @@ class _ReimportFormState extends State<ReimportForm> {
         for (var individualImei in individualImeis) {
           if (allItems.length >= qty) break;
           
-          // Check for duplicates
+          // Check for duplicates in both addedItems and allItems
           if (await _checkDuplicateImeis(individualImei) != null) continue;
+          if (allItems.any((item) => item['imei'] == individualImei)) continue;
           
           try {
             final productResponse = await retry(
